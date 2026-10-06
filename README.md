@@ -9,7 +9,8 @@ when Claude is done, and waves when you say hi.
 
 Terra is an Electron app for macOS. It stays on top of your windows in the bottom-right
 corner, out of the way: only Terra itself catches the mouse, and clicks anywhere around it
-go straight through to whatever is behind.
+go straight through to whatever is behind. By default it only comes out while the Claude
+desktop app is open: it waves hi when Claude opens and tucks itself away when Claude quits.
 
 ## What it does
 
@@ -21,9 +22,25 @@ go straight through to whatever is behind.
 - Click it and it loves you. Click it 5 times quickly and it gets dizzy. Drag it anywhere;
   it remembers the spot (and goes back to the corner if that screen is gone).
 - Menu bar icon: **Play animation** and **Play reaction** to try everything, **Back to idle**,
-  **Size** (1x, 1.5x, 2x, **Match small (2.25x)**, 3x or 4x), **Patrol** (walks on or off), **Start at login**,
-  **Install in Claude desktop** and **Quit**. The top of the menu shows whether Terra is
-  listening and whether the hooks and the Claude desktop tools are installed.
+  **Size** (1x, 1.5x, 2x, **Match small (2.25x)**, 3x or 4x), **Show Terra** (see below),
+  **Patrol** (walks on or off), **Start at login**, **Install in Claude desktop** and
+  **Quit**. The top of the menu shows whether Terra is listening and whether the hooks and
+  the Claude desktop tools are installed. The icon stays in the menu bar even while Terra
+  is hidden.
+- **Show Terra**, remembered between launches:
+  - *Only while Claude desktop is running* (the default)
+  - *While Claude desktop or a Claude Code session is active*: a session counts from its
+    first hook event until 10 minutes after its last one
+  - *Always*
+
+  Terra checks every 3 seconds whether the Claude desktop app
+  (`com.anthropic.claudefordesktop`) is open, by asking macOS's Launch Services
+  (`lsappinfo`), which needs no special permissions. When Claude opens and that brings
+  Terra out, it says hi. When Claude quits, Terra finishes what it is doing, then hides.
+  While hidden it doesn't walk, blink or fall asleep, but it still hears Claude Code and
+  Claude desktop, so it is up to date when it comes back.
+- The app turns **Start at login** on the first time it runs, so Terra starts quietly at
+  login and appears when Claude opens. Turn it off in the menu and it stays off.
 - Terra starts at **Match small (2.25x)**, about 100 points tall, the size of the Codex
   pet. A size you pick from the menu is remembered. At 2.25x on a Retina screen an art
   pixel is 4.5 screen pixels, so Terra draws each one 4 or 5 pixels wide in a fixed
@@ -226,10 +243,11 @@ in `reactions.js`.
    `/Applications/Terra.app/Contents/MacOS/Terra --uninstall-mcp` (or
    `npm run mcp:uninstall`). Only Terra's entry is removed, and the config is backed up
    first. Then quit and reopen the Claude desktop app.
-3. If you turned on **Start at login**, turn it off in the menu.
+3. Turn off **Start at login** in the menu (the app turns it on when it first runs).
 4. Quit Terra from the menu and drag it from Applications to the Bin.
 5. Optionally delete `~/.terra-pet` (the port file) and
-   `~/Library/Application Support/Terra` (where Terra remembers its spot and size).
+   `~/Library/Application Support/Terra` (where Terra remembers its spot, size and when
+   to show itself).
 
 ## Privacy
 
@@ -238,7 +256,7 @@ only accepts connections from your own Mac (`127.0.0.1`), where the hook sends i
 which checks it for trigger words in memory and then drops it: prompt text is never written
 to disk, logged, or sent anywhere else. The Claude desktop tools send Terra nothing but one
 name from a fixed list (`love`, `working`, ...); the listener refuses anything else, so no
-conversation text reaches Terra that way. Terra stores only its position and size.
+conversation text reaches Terra that way. Terra stores only its position, size and Show Terra choice.
 
 ## Development
 
@@ -274,6 +292,8 @@ notarized, which is why macOS asks you to confirm the first time you open it.
 - `json-file.js`: safe edits (backup, symlinks, indentation) for both installers
 - `reactions.js`: trigger words
 - `window-state.js`: size, position and remembering them
+- `visibility.js`: when Terra is shown (Show Terra) and the preferences file
+- `claude-app.js`: whether the Claude desktop app is running
 - `renderer/`: the page that draws Terra: the state machine, animations and emotes
 - `assets/`: the app and menu bar icons
 - `test/`: unit and end-to-end tests (`test/run.js` runs them all)

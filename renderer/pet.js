@@ -100,14 +100,37 @@ function advance(dt) {
       step++;
     } else if (++playsDone < clip.plays) {
       step = 0;
+      if (clip.plays === Infinity) animationDone(); // a loop finishes at the end of each cycle
     } else {
       // Finished: hold the last frame and hand over to whatever comes next.
       stepTime = 0;
+      animationDone();
       const done = onClipEnd;
       onClipEnd = null;
       if (done) done();
       return;
     }
+  }
+}
+
+// ---- Hiding (Show Terra in the menu) ----
+
+let hidden = false;          // the window is hidden: no patrol, blinking or sleep timer
+let hideAfterCurrent = false; // asked to hide: finish the current animation first
+
+// Called when an animation has played to its end (a loop: the end of a cycle).
+function animationDone() {
+  if (!hideAfterCurrent) return;
+  goHidden();
+  window.terra.readyToHide();
+}
+
+function goHidden() {
+  hidden = true;
+  hideAfterCurrent = false;
+  if (walk) {
+    walk = null; // patrol pauses; Terra stays where it is
+    setState('idle', { fromPatrol: true });
   }
 }
 
@@ -295,7 +318,7 @@ function playReaction(name, { then = null } = {}) {
 // every other state (work, wait, think, ...). The sleep timer restarts from
 // the last state change.
 function updateIdle(now) {
-  if (state !== 'idle' || routePending || press) return;
+  if (hidden || state !== 'idle' || routePending || press) return;
   if (now - sleepClock >= SLEEP_AFTER) {
     setState('sleep');
   } else if (patrolEnabled && now >= nextPatrolAt) {
@@ -421,6 +444,27 @@ function onClick() {
 window.terra.onSetState((name, options) => setState(name, { then: options && options.then }));
 window.terra.onPlayReaction((name, options) => playReaction(name, { then: options && options.then }));
 window.terra.onSetScale((next) => applyScale(next));
+
+// visible: shown again (greet: because Claude desktop just opened). Not visible: finish
+// the current animation, then say so; `now` hides straight away (Terra started hidden).
+window.terra.onVisibility(({ visible, greet = false, now = false }) => {
+  if (!visible) {
+    if (now) goHidden();
+    else hideAfterCurrent = true;
+    return;
+  }
+  const wasHidden = hidden;
+  hidden = false;
+  hideAfterCurrent = false;
+  if (wasHidden) {
+    // The time spent hidden doesn't count toward sleeping, blinking or patrolling.
+    const t = performance.now();
+    sleepClock = t;
+    nextBlinkAt = t + rand(BLINK_EVERY);
+    nextPatrolAt = t + rand(PATROL_EVERY);
+  }
+  if (greet) playReaction('hi', { then: state === 'work' || state === 'sitDown' ? 'sitDown' : null });
+});
 
 window.terra.onSetPatrol((on) => {
   patrolEnabled = on;

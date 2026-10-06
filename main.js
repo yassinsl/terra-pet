@@ -6,6 +6,8 @@ const EMOTES = require('./renderer/emotes.js');
 const hooks = require('./hook-installer.js');
 const mcp = require('./mcp-installer.js');
 const windowState = require('./window-state.js');
+const visibility = require('./visibility.js');
+const claude = require('./claude-app.js'); // used as claude.isRunning() so tests can fake it
 const { HOST, startListener, removePortFile } = require('./listener.js');
 const { matchReaction } = require('./reactions.js');
 
@@ -32,6 +34,13 @@ let pet = { state: null, next: null, since: Date.now() }; // as last reported by
 let lastEventAt = Date.now();
 let mouseOnPet = false;
 let saveTimer = null;
+let prefs = { showWhen: visibility.DEFAULT_MODE, loginItemDefaultDone: false };
+let claudeRunning = null; // Claude desktop, as of the last check (null: not known yet)
+let lastCodeEventAt = 0;  // last Claude Code hook event
+let petShown = false;
+let hidePending = false;  // waiting for the current animation to finish before hiding
+let hideTimer = null;
+let polling = false;
 
 // The packaged app has no npm scripts, so it takes these instead:
 //   Terra --install-hooks | --uninstall-hooks [--settings <path>]
@@ -79,6 +88,8 @@ const working = () => busy(pet.state) || busy(pet.next);
 // Claude Code hook events -> pet states.
 function onHookEvent({ event, prompt }) {
   lastEventAt = Date.now();
+  lastCodeEventAt = lastEventAt;
+  applyVisibility(); // a Claude Code session may be what shows Terra
   clearTimeout(loopReactionTimer);
   switch (event) {
     case 'prompt': {
@@ -163,6 +174,84 @@ function cursorOnPet() {
   return cx >= box.x && cx < box.x + box.width && cy >= box.y && cy < box.y + box.height;
 }
 
+// ---- Showing and hiding the pet ("Show Terra" in the menu) ----
+// The window hides, but Terra keeps running: the listener still takes hook events and
+// MCP calls, the renderer still follows them, and the tray icon stays in the menu bar.
+
+const prefsFile = () => path.join(app.getPath('userData'), 'preferences.json');
+
+function savePrefs() {
+  try {
+    visibility.savePrefs(prefsFile(), prefs);
+  } catch (err) {
+    console.error('Terra could not save its preferences:', err.message);
+  }
+}
+
+const wantShown = () => visibility.shouldShow({ mode: prefs.showWhen, claudeRunning: claudeRunning === true, lastCodeEventAt, now: Date.now() });
+
+// greet: Claude desktop has just opened, so say hi if that is what brings Terra out.
+function applyVisibility({ greet = false } = {}) {
+  if (!win || win.isDestroyed()) return;
+  if (wantShown()) {
+    if (hidePending) { // it never got as far as hiding
+      clearTimeout(hideTimer);
+      hidePending = false;
+      sendToPet('pet:visibility', { visible: true });
+    } else if (!petShown) {
+      petShown = true;
+      win.showInactive();
+      sendToPet('pet:visibility', { visible: true, greet });
+      console.log(`Terra: shown${greet ? ' (Claude desktop opened)' : ''}`);
+    }
+  } else if (petShown && !hidePending) {
+    // Let the current animation finish; the renderer says when. Hide anyway after a while.
+    hidePending = true;
+    sendToPet('pet:visibility', { visible: false });
+    hideTimer = setTimeout(hideNow, 6000);
+  }
+}
+
+function hideNow() {
+  clearTimeout(hideTimer);
+  if (!hidePending) return;
+  hidePending = false;
+  petShown = false;
+  setMouseOnPet(false);
+  win.hide();
+  console.log('Terra: hidden');
+}
+
+async function checkClaude() {
+  if (polling) return;
+  polling = true;
+  try {
+    const running = await claude.isRunning();
+    if (running === null) return applyVisibility(); // couldn't tell; keep what we had
+    const opened = running && claudeRunning === false;
+    claudeRunning = running;
+    applyVisibility({ greet: opened });
+  } finally {
+    polling = false;
+  }
+}
+
+function setShowWhen(mode) {
+  prefs.showWhen = mode;
+  savePrefs();
+  applyVisibility();
+  updateTrayMenu();
+}
+
+// The packaged app starts at login by default, so it is there (hidden) when Claude opens.
+// Only once: after you turn it off in the menu it stays off.
+function applyLoginItemDefault() {
+  if (!app.isPackaged || prefs.loginItemDefaultDone) return;
+  app.setLoginItemSettings({ openAtLogin: true });
+  prefs.loginItemDefaultDone = true;
+  savePrefs();
+}
+
 // ---- Remembering position and size (in the app's user data folder) ----
 
 const stateFile = () => path.join(app.getPath('userData'), 'window-state.json');
@@ -244,8 +333,15 @@ function createWindow() {
   win.setIgnoreMouseEvents(true, { forward: true });
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: { scale: String(scale) } });
-  win.once('ready-to-show', () => win.showInactive());
-  win.webContents.on('did-finish-load', () => sendToPet('pet:set-patrol', patrolEnabled));
+  win.once('ready-to-show', () => {
+    if (!wantShown()) return; // stays hidden until Claude opens (or whatever Show Terra says)
+    petShown = true;
+    win.showInactive();
+  });
+  win.webContents.on('did-finish-load', () => {
+    sendToPet('pet:set-patrol', patrolEnabled);
+    if (!wantShown()) sendToPet('pet:visibility', { visible: false, now: true });
+  });
   win.on('move', saveSoon);
 }
 
@@ -328,6 +424,10 @@ function updateTrayMenu() {
       submenu: SCALES.map((s) => ({ label: sizeLabel(s), type: 'radio', checked: s === scale, click: () => setScale(s) })),
     },
     {
+      label: 'Show Terra',
+      submenu: visibility.MODES.map((m) => ({ label: m.label, type: 'radio', checked: prefs.showWhen === m.id, click: () => setShowWhen(m.id) })),
+    },
+    {
       label: 'Patrol',
       type: 'checkbox',
       checked: patrolEnabled,
@@ -355,6 +455,10 @@ function updateTrayMenu() {
 // ---- Start ----
 
 function startApp() {
+  ipcMain.on('pet:ready-to-hide', (event) => {
+    if (win && event.sender === win.webContents) hideNow();
+  });
+
   ipcMain.on('pet:state', (event, state, next) => {
     if (!win || event.sender !== win.webContents) return;
     pet = { state, next, since: state === pet.state ? pet.since : Date.now() };
@@ -402,9 +506,13 @@ function startApp() {
     }
     hooksStatus = hooks.status();
     mcpStatus = mcp.status();
+    prefs = visibility.loadPrefs(prefsFile());
+    applyLoginItemDefault();
+    claudeRunning = await claude.isRunning(); // before the window, so it starts shown or hidden
     createWindow();
     createTray();
     setInterval(checkStuck, STUCK_CHECK_EVERY);
+    setInterval(checkClaude, claude.POLL_MS); // also notices a Claude Code session running out
     for (const file of [hooks.defaultSettingsPath(), hooks.hookCopyPath()]) fs.watchFile(file, { interval: 2000 }, refreshHooksStatus);
     fs.watchFile(mcp.defaultConfigPath(), { interval: 2000 }, refreshMcpStatus);
     try {

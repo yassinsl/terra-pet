@@ -39,6 +39,8 @@
       "pet-commands.js",
       "mcp/terra-mcp.js",
       "window-state.js",
+      "visibility.js",
+      "claude-app.js",
       "renderer/**",
       "hooks/terra-hook.sh",
       "assets/trayTemplate.png",
