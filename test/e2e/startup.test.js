@@ -14,15 +14,22 @@ const ws = require(path.join(ROOT, 'window-state.js'));
 // Launches Terra once. `saved` goes into window-state.json first (unless undefined);
 // `pick` is a Size menu label to choose through the tray before quitting the normal way.
 // Pass `userData` to keep the folder for another launch.
-function launch(saved, { pick, userData } = {}) {
+// `prefs` goes into preferences.json; `claude: true` fakes the Claude desktop app being open;
+// `packaged: true` runs as the packaged app with login item calls recorded, not made.
+function launch(saved, { pick, userData, prefs, claude, packaged } = {}) {
   const dir = userData || fs.mkdtempSync(path.join(os.tmpdir(), 'terra-e2e-userdata-'));
   if (saved !== undefined) fs.writeFileSync(path.join(dir, 'window-state.json'), typeof saved === 'string' ? saved : JSON.stringify(saved));
-  const env = { ...process.env, HOME: home, TERRA_TEST_USERDATA: dir, ...(pick ? { TERRA_TEST_PICK: pick } : {}) };
+  if (prefs !== undefined) fs.writeFileSync(path.join(dir, 'preferences.json'), JSON.stringify(prefs));
+  const env = {
+    ...process.env, HOME: home, TERRA_TEST_USERDATA: dir, TERRA_TEST_CLAUDE: claude ? 'running' : 'not running',
+    ...(pick ? { TERRA_TEST_PICK: pick } : {}), ...(packaged ? { TERRA_TEST_PACKAGED: '1' } : {}),
+  };
   const r = spawnSync(ELECTRON, [path.join(__dirname, 'startup-app.js')], { encoding: 'utf8', env, timeout: 30000 });
   const line = (tag) => (r.stdout || '').split('\n').find((l) => l.startsWith(`${tag} `));
   const result = line('RESULT') ? JSON.parse(line('RESULT').slice(7)) : { error: r.stderr || `exit ${r.status}` };
   if (line('PICKED')) result.picked = JSON.parse(line('PICKED').slice(7));
   result.savedFile = ws.load(path.join(dir, 'window-state.json'));
+  result.prefsFile = ws.load(path.join(dir, 'preferences.json'));
   if (!userData) fs.rmSync(dir, { recursive: true, force: true });
   return result;
 }
@@ -79,6 +86,31 @@ for (const s of ws.SCALES) {
   const kept = two.scale === s && JSON.stringify(two.bounds) === JSON.stringify(p && p.bounds) && two.checked.join() === label(s) && canvasFits(two);
   check(`  ${label(s)}`, picked && kept,
     `picked: window ${p && `${p.bounds.width}x${p.bounds.height}`}, page ${p && p.scale}x, menu ${p && p.checked}; saved ${JSON.stringify(two.savedFile && { scale: two.savedFile.scale })}; after restart: window ${two.bounds.width}x${two.bounds.height} at ${two.bounds.x},${two.bounds.y}, page ${two.scale}x, menu ${two.checked}`);
+}
+
+section('Show Terra at startup (remembered; Claude desktop faked)');
+for (const [prefs, claudeOpen, want] of [
+  [{}, false, false], [{}, true, true],
+  [{ showWhen: 'claude' }, false, false], [{ showWhen: 'claude' }, true, true],
+  [{ showWhen: 'claude-or-code' }, false, false],
+  [{ showWhen: 'always' }, false, true],
+]) {
+  const x = launch(undefined, { prefs, claude: claudeOpen });
+  check(`  ${prefs.showWhen || 'no choice yet (default)'}, Claude ${claudeOpen ? 'open' : 'closed'}`, x.visible === want && x.scale === 2.25,
+    `window ${x.visible ? 'shown' : 'hidden'}${x.visible === want ? '' : ` (want ${want ? 'shown' : 'hidden'})`}, page loaded at ${x.scale}x`);
+}
+
+section('Start at login, packaged app (login item calls recorded, not made)');
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'terra-e2e-userdata-'));
+  const one = launch(undefined, { userData: dir, packaged: true, prefs: {} });
+  check('  first run turns it on, starting hidden', JSON.stringify(one.loginCalls) === '[{"openAtLogin":true}]' && one.prefsFile.loginItemDefaultDone === true && one.visible === false,
+    `calls ${JSON.stringify(one.loginCalls)}, preferences ${JSON.stringify(one.prefsFile)}, window ${one.visible ? 'shown' : 'hidden'}`);
+  const two = launch(undefined, { userData: dir, packaged: true });
+  check('  next runs leave it alone (so turning it off sticks)', two.loginCalls.length === 0, `calls ${JSON.stringify(two.loginCalls)}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+  const dev = launch(undefined, { prefs: {} });
+  check('  npm start never touches it', dev.loginCalls.length === 0 && !(dev.prefsFile || {}).loginItemDefaultDone, `calls ${JSON.stringify(dev.loginCalls)}`);
 }
 
 section('app flags for the packaged app');

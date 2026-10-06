@@ -19,10 +19,12 @@ const SUITES = [
   ['unit', process.execPath, 'test/unit/mcp-installer.test.js'],
   ['unit', process.execPath, 'test/unit/mcp-server.test.js'],
   ['unit', process.execPath, 'test/unit/window-state.test.js'],
+  ['unit', process.execPath, 'test/unit/visibility.test.js'],
   ['e2e', process.execPath, 'test/e2e/startup.test.js'],
   ['e2e', ELECTRON, 'test/e2e/events.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/pet.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/size.e2e.js'],
+  ['e2e', ELECTRON, 'test/e2e/visibility.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/mcp.e2e.js'],
 ];
 

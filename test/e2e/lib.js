@@ -6,20 +6,34 @@ const path = require('node:path');
 const { ROOT, check, section, summary, wait, isolateHome } = require('../lib.js');
 
 isolateHome('e2e'); // before main.js requires listener.js
-const { app, BrowserWindow, Menu, ipcMain, powerSaveBlocker, screen } = require('electron');
+const { app, BrowserWindow, Menu, Tray, ipcMain, powerSaveBlocker, screen } = require('electron');
 // A fresh user data folder, so a position or size you saved doesn't leak into the tests.
 const userData = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'terra-e2e-userdata-'));
 app.setPath('userData', userData);
 // These tests were written around a 4x window, so they start with 4x chosen (the default,
 // Match small 2.25x, is covered by startup.test.js and size.e2e.js).
 fs.writeFileSync(path.join(userData, 'window-state.json'), JSON.stringify({ version: 2, scale: 4 }));
+// And with Show Terra on Always, so the window is up (visibility.e2e.js tests the modes).
+const prefsFile = path.join(userData, 'preferences.json');
+fs.writeFileSync(prefsFile, JSON.stringify({ showWhen: 'always' }));
+
+// A fake "is Claude desktop running": the tests never ask about the real app. Checked
+// every 200 ms instead of 3 s so the tests needn't wait.
+const claude = require(path.join(ROOT, 'claude-app.js'));
+claude.isRunning = async () => t.claudeRunning;
+claude.POLL_MS = 200;
 const ANIMATIONS = require(path.join(ROOT, 'renderer', 'animations.js'));
 const EMOTES = require(path.join(ROOT, 'renderer', 'emotes.js'));
 
-const t = { trayMenu: null, ignoreCalls: [], states: [], win: null, wc: null, consoleLog: [], realMouse: 0, userData };
+const t = { trayMenu: null, tray: null, ignoreCalls: [], states: [], win: null, wc: null, consoleLog: [], realMouse: 0, userData, prefsFile, claudeRunning: false };
 
 const realBuild = Menu.buildFromTemplate.bind(Menu);
 Menu.buildFromTemplate = (template) => (t.trayMenu = realBuild(template));
+const realSetMenu = Tray.prototype.setContextMenu;
+Tray.prototype.setContextMenu = function (menu) {
+  t.tray = this;
+  return realSetMenu.call(this, menu);
+};
 const realIgnore = BrowserWindow.prototype.setIgnoreMouseEvents;
 BrowserWindow.prototype.setIgnoreMouseEvents = function (ignore, options) {
   t.ignoreCalls.push({ ignore, forward: !!(options && options.forward) });
