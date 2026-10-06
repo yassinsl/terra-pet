@@ -5,7 +5,10 @@
   "private": true,
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "hooks:install": "node scripts/install-hooks.js",
+    "hooks:uninstall": "node scripts/uninstall-hooks.js",
+    "test": "node test/run.js"
   },
   "devDependencies": {
     "electron": "^44.5.1"
