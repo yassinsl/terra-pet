@@ -21,6 +21,7 @@ const LOOP_REACTION_MS = 4000;
 let win = null;
 let tray = null; // kept at module level so it isn't garbage-collected
 let scale = windowState.DEFAULT_SCALE; // 1x to 4x (SCALES): one sprite pixel is `scale` points
+let scaleChosen = false; // picked from the Size menu (then it is saved and wins at startup)
 let patrolEnabled = true;
 let listener = null;      // { server, port } once listening
 let listenerError = null;
@@ -171,7 +172,7 @@ function saveState() {
   saveTimer = null;
   if (!win || win.isDestroyed()) return;
   try {
-    windowState.save(stateFile(), { bounds: win.getBounds(), scale });
+    windowState.save(stateFile(), { bounds: win.getBounds(), scale, scaleChosen });
   } catch (err) {
     console.error('Terra could not save its position:', err.message);
   }
@@ -183,15 +184,27 @@ function saveSoon() {
   saveTimer = setTimeout(saveState, 1000);
 }
 
-// Resizes around the pet's feet, so it stays standing on the same spot.
+const sizeLabel = (s) => (s === 2.25 ? 'Match small (2.25x)' : `${s}x`);
+
+// A size picked from the menu. Resizes around the pet's feet, so it stays standing on
+// the same spot, and remembers the choice (even when it is already the current size).
 function setScale(next) {
-  if (!win || next === scale || !SCALES.includes(next)) return;
-  const feet = windowState.feetOf(win.getBounds());
-  scale = next;
-  win.setBounds(windowState.boundsAt(feet, scale));
-  sendToPet('pet:set-scale', scale);
+  if (!win || !SCALES.includes(next)) return;
+  scaleChosen = true;
+  if (next !== scale) {
+    const target = windowState.boundsAt(windowState.feetOf(win.getBounds()), next);
+    scale = next;
+    win.setBounds(target);
+    sendToPet('pet:set-scale', scale);
+    const now = win.getBounds();
+    if (now.width !== target.width || now.height !== target.height) {
+      console.error(`Terra: asked for ${target.width}x${target.height} at ${next}x but the window is ${now.width}x${now.height}`);
+    }
+  }
   saveState();
   updateTrayMenu();
+  const b = win.getBounds();
+  console.log(`Terra: size ${sizeLabel(scale)}, window ${b.width}x${b.height} at ${b.x},${b.y}`);
 }
 
 function createWindow() {
@@ -201,6 +214,8 @@ function createWindow() {
     screen.getPrimaryDisplay().workArea,
   );
   scale = start.scale;
+  scaleChosen = start.scaleChosen;
+  console.log(`Terra: starting at ${sizeLabel(scale)} (${scaleChosen ? 'the size you picked' : 'default size'})`);
 
   win = new BrowserWindow({
     ...start.bounds,
@@ -310,7 +325,7 @@ function updateTrayMenu() {
     { type: 'separator' },
     {
       label: 'Size',
-      submenu: SCALES.map((s) => ({ label: `${s}x`, type: 'radio', checked: s === scale, click: () => setScale(s) })),
+      submenu: SCALES.map((s) => ({ label: sizeLabel(s), type: 'radio', checked: s === scale, click: () => setScale(s) })),
     },
     {
       label: 'Patrol',

@@ -10,8 +10,10 @@ let PET_X = 8 * scale;
 let PET_Y = 28 * scale;
 // Device pixels per art pixel: the size times the screen's pixel ratio (2 on Retina).
 // The canvas has one pixel per device pixel, so on Retina an art pixel is a whole number
-// of device pixels at every size (2 at 1x, 3 at 1.5x) instead of the screen stretching
-// a smaller canvas. Where the ratio is 1, 1.5x can't be whole and some pixels come out wider.
+// of device pixels at most sizes (2 at 1x, 3 at 1.5x) instead of the screen stretching
+// a smaller canvas. 2.25x on Retina is 4.5: with smoothing off, art pixels alternate
+// 4 and 5 device pixels, crisp but not all the same width. Where the ratio is 1, 1.5x
+// and 2.25x can't be whole either.
 let px = scale;
 
 const BLINK_EVERY = [2500, 5000];    // ms between idle blinks
@@ -38,14 +40,6 @@ function applyScale(next) {
   drawn = ''; // force a redraw
 }
 
-// Moving to a screen with another pixel ratio (from a Retina laptop to a plain monitor,
-// say) changes devicePixelRatio, so the canvas is rebuilt for the new one.
-function watchPixelRatio() {
-  matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change', () => {
-    applyScale(scale);
-    watchPixelRatio();
-  }, { once: true });
-}
 
 const sheet = new Image();
 sheet.src = '../Bot/spritesheet-x1.png';
@@ -158,6 +152,10 @@ function draw() {
   const key = `${clip.row}:${frame}:${showEmote ? `${emote.name}:${emote.step}` : ''}`;
   if (key === drawn) return;
   drawn = key;
+  if (!Number.isInteger(px)) {
+    drawMapped(clip.row, frame, showEmote ? img : null);
+    return;
+  }
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(
     sheet,
@@ -165,6 +163,57 @@ function draw() {
     8 * px, 28 * px, CELL_W * px, CELL_H * px,
   );
   if (showEmote) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+}
+
+// When an art pixel isn't a whole number of device pixels (2.25x on Retina is 4.5),
+// letting drawImage scale leaves the GPU to choose, pixel by pixel, which art pixel a
+// device pixel exactly on a boundary shows, and some edges come out jagged. Instead the
+// frame is put together at art size (the 64x80 canvas: pet at 8,28, emote on top) and
+// every device pixel takes the art pixel floor(x / px): straight edges, and art pixels
+// floor(px) or ceil(px) wide in a fixed rhythm (5,4,5,4... at 4.5). No smoothing anywhere.
+const artPixels = new Map(); // image -> its RGBA pixels
+function pixelsOf(img) {
+  if (!artPixels.has(img)) {
+    // An OffscreenCanvas, so this one-off copy isn't a draw of the visible canvas.
+    const c = new OffscreenCanvas(img.naturalWidth, img.naturalHeight).getContext('2d');
+    c.drawImage(img, 0, 0);
+    artPixels.set(img, c.getImageData(0, 0, img.naturalWidth, img.naturalHeight).data);
+  }
+  return artPixels.get(img);
+}
+
+function drawMapped(row, frame, emoteImg) {
+  const art = new Uint8ClampedArray(64 * 80 * 4);
+  const cells = pixelsOf(sheet);
+  const sheetWidth = sheet.naturalWidth;
+  for (let y = 0; y < CELL_H; y++) {
+    const from = ((row * CELL_H + y) * sheetWidth + frame * CELL_W) * 4;
+    art.set(cells.subarray(from, from + CELL_W * 4), ((28 + y) * 64 + 8) * 4);
+  }
+  if (emoteImg) {
+    const e = pixelsOf(emoteImg);
+    for (let i = 0; i < e.length; i += 4) {
+      const a = e[i + 3] / 255;
+      if (!a) continue;
+      for (let ch = 0; ch < 3; ch++) art[i + ch] = e[i + ch] * a + art[i + ch] * (1 - a);
+      art[i + 3] = 255 * (a + (art[i + 3] / 255) * (1 - a));
+    }
+  }
+  const { width, height } = canvas;
+  const out = ctx.createImageData(width, height);
+  const colOf = Array.from({ length: width }, (_, x) => Math.min(63, Math.floor(x / px)));
+  for (let y = 0; y < height; y++) {
+    const artRow = Math.min(79, Math.floor(y / px)) * 64;
+    for (let x = 0; x < width; x++) {
+      const from = (artRow + colOf[x]) * 4;
+      const to = (y * width + x) * 4;
+      out.data[to] = art[from];
+      out.data[to + 1] = art[from + 1];
+      out.data[to + 2] = art[from + 2];
+      out.data[to + 3] = art[from + 3];
+    }
+  }
+  ctx.putImageData(out, 0, 0);
 }
 
 // ---- State machine ----
@@ -391,6 +440,10 @@ function tick() {
   const now = performance.now();
   const dt = Math.min(now - lastTick, 250); // don't jump after the page was paused
   lastTick = now;
+  // Moving to a screen with another pixel ratio (a Retina laptop to a plain monitor, say)
+  // changes devicePixelRatio; rebuild the canvas for it. Checked every frame because a
+  // matchMedia change event doesn't fire for every way the ratio can change.
+  if (scale * devicePixelRatio !== px) applyScale(scale);
   advance(dt);
   advanceEmote(dt);
   updateWalk(dt);
@@ -400,5 +453,4 @@ function tick() {
 }
 
 applyScale(scale);
-watchPixelRatio();
 requestAnimationFrame(tick);

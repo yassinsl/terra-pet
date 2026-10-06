@@ -21,9 +21,14 @@ go straight through to whatever is behind.
 - Click it and it loves you. Click it 5 times quickly and it gets dizzy. Drag it anywhere;
   it remembers the spot (and goes back to the corner if that screen is gone).
 - Menu bar icon: **Play animation** and **Play reaction** to try everything, **Back to idle**,
-  **Size** (1x, 1.5x, 2x, 3x or 4x), **Patrol** (walks on or off), **Start at login**,
+  **Size** (1x, 1.5x, 2x, **Match small (2.25x)**, 3x or 4x), **Patrol** (walks on or off), **Start at login**,
   **Install in Claude desktop** and **Quit**. The top of the menu shows whether Terra is
   listening and whether the hooks and the Claude desktop tools are installed.
+- Terra starts at **Match small (2.25x)**, about 100 points tall, the size of the Codex
+  pet. A size you pick from the menu is remembered. At 2.25x on a Retina screen an art
+  pixel is 4.5 screen pixels, so Terra draws each one 4 or 5 pixels wide in a fixed
+  pattern: still sharp, but a one-pixel outline can look a hair thicker on one side.
+  On Retina, 1x, 1.5x, 2x, 3x and 4x are perfectly even.
 
 ## Install
 
