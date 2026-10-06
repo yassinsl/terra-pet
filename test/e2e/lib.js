@@ -10,6 +10,9 @@ const { app, BrowserWindow, Menu, ipcMain, powerSaveBlocker, screen } = require(
 // A fresh user data folder, so a position or size you saved doesn't leak into the tests.
 const userData = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'terra-e2e-userdata-'));
 app.setPath('userData', userData);
+// These tests were written around a 4x window, so they start with 4x chosen (the default,
+// Match small 2.25x, is covered by startup.test.js and size.e2e.js).
+fs.writeFileSync(path.join(userData, 'window-state.json'), JSON.stringify({ version: 2, scale: 4 }));
 const ANIMATIONS = require(path.join(ROOT, 'renderer', 'animations.js'));
 const EMOTES = require(path.join(ROOT, 'renderer', 'emotes.js'));
 

@@ -1,17 +1,37 @@
 // Started by startup.test.js: runs the real main.js with a given user data folder,
 // prints where the window opened and at what size, then quits.
+// With TERRA_TEST_PICK set to a Size menu label, it also picks that size through the
+// tray menu (the way a real click arrives), prints the result, and quits through the
+// tray's Quit, the normal way, so the choice is saved as it would be for you.
 const path = require('node:path');
-const { app } = require('electron');
+const { app, Menu } = require('electron');
 
 app.setPath('userData', process.env.TERRA_TEST_USERDATA);
+let trayMenu = null;
+const realBuild = Menu.buildFromTemplate.bind(Menu);
+Menu.buildFromTemplate = (template) => (trayMenu = realBuild(template));
 require(path.join(__dirname, '..', '..', 'main.js'));
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// What Electron runs when the native menu reports a click on an item.
+const nativeClick = (menu, label) => menu._executeCommand({}, menu.items.find((i) => i.label === label).commandId);
 
 app.on('browser-window-created', (_e, win) => {
   win.webContents.once('did-finish-load', async () => {
     // canvas: its size on screen (CSS pixels, the window's points); backing: its own pixels.
-    const page = await win.webContents.executeJavaScript('({ scale, dpr: devicePixelRatio, canvas: [canvas.clientWidth, canvas.clientHeight], backing: [canvas.width, canvas.height] })');
-    process.stdout.write(`RESULT ${JSON.stringify({ bounds: win.getBounds(), ...page })}\n`);
-    app.exit(0);
+    const look = async () => ({
+      bounds: win.getBounds(),
+      ...(await win.webContents.executeJavaScript('({ scale, dpr: devicePixelRatio, canvas: [canvas.clientWidth, canvas.clientHeight], backing: [canvas.width, canvas.height] })')),
+      checked: trayMenu.items.find((i) => i.label === 'Size').submenu.items.filter((i) => i.checked).map((i) => i.label),
+    });
+    process.stdout.write(`RESULT ${JSON.stringify(await look())}\n`);
+    const pick = process.env.TERRA_TEST_PICK;
+    if (!pick) return app.exit(0);
+    await wait(300);
+    nativeClick(trayMenu.items.find((i) => i.label === 'Size').submenu, pick);
+    await wait(500);
+    process.stdout.write(`PICKED ${JSON.stringify(await look())}\n`);
+    nativeClick(trayMenu, 'Quit');
   });
 });
 setTimeout(() => app.exit(1), 20000);

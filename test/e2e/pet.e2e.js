@@ -240,7 +240,9 @@ start(async () => {
       subItem('Play animation', 'idle').click(); // leaving the state removes the looping emote
       await wait(300);
       const after = await takeFrames();
-      const removed = after.length > 0 && after.every((f) => !f.emote) && after[0].row === 0;
+      // From the switch to idle on (a frame may have been drawn just before the click).
+      const fromIdle = after.slice(Math.max(0, after.findIndex((f) => f.row === 0)));
+      const removed = fromIdle.length > 0 && fromIdle.every((f) => !f.emote) && fromIdle[0].row === 0;
       return { ok: r.ok && removed, line: `${r.line}; leaving ${def.anim}: ${removed ? 'emote removed' : `rows ${[...new Set(after.map((f) => f.row))].join(',')}, ${after.filter((f) => f.emote).length} emote frames`}` };
     });
   }
@@ -447,13 +449,14 @@ start(async () => {
   await waitFor('idle', 3000);
   const dpr = await js('devicePixelRatio');
   const sizes = menuItem('Size').submenu.items.map((i) => i.label);
-  check('menu: 1x and 1.5x above 2x, 3x and 4x', sizes.join(' ') === '1x 1.5x 2x 3x 4x', `${sizes.join(' ')}; screen pixel ratio ${dpr}`);
+  check('menu: 1x, 1.5x, 2x, Match small (2.25x), 3x, 4x', sizes.join(' | ') === '1x | 1.5x | 2x | Match small (2.25x) | 3x | 4x', `${sizes.join(' | ')}; screen pixel ratio ${dpr}`);
+  const sizeLabel = (s) => (s === 2.25 ? 'Match small (2.25x)' : `${s}x`);
   // Moves the page's pointer to (x,y); true when clicks there go through to what is behind.
   const passesThrough = async (x, y) => { t.wc.sendInputEvent({ type: 'mouseMove', x, y }); await wait(100); return t.ignoreCalls[t.ignoreCalls.length - 1].ignore; };
-  for (const [from, to] of [[4, 1.5], [1.5, 1], [1, 2], [2, 3], [3, 4]]) {
+  for (const [from, to] of [[4, 1.5], [1.5, 1], [1, 2], [2, 2.25], [2.25, 3], [3, 4]]) {
     const before = t.win.getBounds();
     await takeFrames();
-    subItem('Size', `${to}x`).click();
+    subItem('Size', sizeLabel(to)).click();
     await wait(400);
     const after = t.win.getBounds();
     const g = ws.geometry(to);
@@ -468,8 +471,11 @@ start(async () => {
     const savedHere = saved && saved.scale === to && JSON.stringify(saved.feet) === JSON.stringify(ws.feetOf(after));
     check(`  ${from}x -> ${to}x`, after.width === g.width && after.height === g.height && feetSame
       && canvas.join() === [g.width, g.height, Math.round(g.width * dpr), Math.round(g.height * dpr)].join()
-      && f && f.dest.join() === [8 * k, 28 * k, 48 * k].join() && radio.includes(`${to}x*`) && savedHere,
-      `window ${after.width}x${after.height}, feet ${feetSame ? 'unchanged' : 'MOVED'}, canvas ${canvas[0]}x${canvas[1]} (${canvas[2]}x${canvas[3]} device px), pet drawn at ${f && f.dest} device px, menu ${radio}, saved ${saved && saved.scale}x ${savedHere ? 'at these feet' : 'ELSEWHERE'}`);
+      // Sizes that aren't whole device pixels per art pixel are drawn pixel by pixel, not with
+      // drawImage; size.e2e.js measures those on screen.
+      && (Number.isInteger(k) ? f && f.dest.join() === [8 * k, 28 * k, 48 * k].join() : (await js('drawn')) !== '')
+      && radio.includes(`${sizeLabel(to)}*`) && savedHere,
+      `window ${after.width}x${after.height}, feet ${feetSame ? 'unchanged' : 'MOVED'}, canvas ${canvas[0]}x${canvas[1]} (${canvas[2]}x${canvas[3]} device px), pet drawn ${Number.isInteger(k) ? `at ${f && f.dest} device px` : 'pixel by pixel'}, menu ${radio}, saved ${saved && saved.scale}x ${savedHere ? 'at these feet' : 'ELSEWHERE'}`);
 
     const spots = [['pet centre', p.x + p.width / 2, p.y + p.height / 2, false], ['pet top-left corner', p.x, p.y, false],
       ['pet bottom-right corner', p.x + p.width - 1, p.y + p.height - 1, false], ['just left of the pet', p.x - 1, p.y + p.height / 2, true],
@@ -536,15 +542,25 @@ start(async () => {
     if (to === 1.5) {
       // As if the window moved to a screen with another pixel ratio, then back.
       const other = dpr === 1 ? 2 : 1;
-      const look = async () => { await wait(300); const c = await js('[devicePixelRatio, canvas.width, canvas.height]'); return [...c, ((await takeFrames()).pop() || { dest: [] }).dest.join()]; };
+      // Pixel ratio, canvas size, where drawImage put the pet (only used when an art pixel is
+      // whole device pixels; other sizes are drawn pixel by pixel), and two probes of the
+      // canvas itself: opaque in the middle of the pet's body, clear in the empty corner.
+      const look = async () => {
+        await wait(300);
+        const c = await js(`[devicePixelRatio, canvas.width, canvas.height,
+          ctx.getImageData(Math.floor(32 * px), Math.floor(64 * px), 1, 1).data[3], ctx.getImageData(Math.floor(2 * px), Math.floor(2 * px), 1, 1).data[3]]`);
+        return [...c.slice(0, 3), ((await takeFrames()).pop() || { dest: [] }).dest.join(), ...c.slice(3)];
+      };
       await takeFrames();
       await t.wc.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: other, mobile: false });
       const there = await look();
       await t.wc.debugger.sendCommand('Emulation.clearDeviceMetricsOverride');
       const back = await look();
-      const fits = (r, ratio) => r.slice(0, 4).join() === [ratio, g.width * ratio, g.height * ratio, [8, 28, 48].map((v) => v * to * ratio).join()].join();
+      const fits = (r, ratio) => r.slice(0, 3).join() === [ratio, g.width * ratio, g.height * ratio].join() && r[4] === 255 && r[5] === 0
+        && (!Number.isInteger(to * ratio) || r[3] === [8, 28, 48].map((v) => v * to * ratio).join());
       check(`  ${to}x: canvas follows the screen's pixel ratio`, fits(there, other) && fits(back, dpr),
-        `ratio ${other}: canvas ${there[1]}x${there[2]}, pet at ${there[3]}; back to ${dpr}: ${back[1]}x${back[2]}, pet at ${back[3]}`);
+        `ratio ${other}: canvas ${there[1]}x${there[2]}, ${Number.isInteger(to * other) ? `pet at ${there[3]}` : 'drawn pixel by pixel'}, body ${there[4] === 255 ? 'opaque' : 'MISSING'}, corner ${there[5] === 0 ? 'clear' : 'NOT CLEAR'}; `
+        + `back to ${dpr}: ${back[1]}x${back[2]}, pet at ${back[3]}, body ${back[4] === 255 ? 'opaque' : 'MISSING'}, corner ${back[5] === 0 ? 'clear' : 'NOT CLEAR'}`);
     }
   }
 

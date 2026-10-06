@@ -22,6 +22,7 @@ const SUITES = [
   ['e2e', process.execPath, 'test/e2e/startup.test.js'],
   ['e2e', ELECTRON, 'test/e2e/events.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/pet.e2e.js'],
+  ['e2e', ELECTRON, 'test/e2e/size.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/mcp.e2e.js'],
 ];
 
