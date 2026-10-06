@@ -7,11 +7,17 @@ const { spawnSync } = require('node:child_process');
 const { ROOT, check, section, summary } = require('../lib.js');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'terra-installer-'));
-const HOOK = path.join(ROOT, 'hooks', 'terra-hook.sh');
+// The installer copies the hook script into ~/.terra-pet, so HOME is a temp folder too.
+const home = path.join(tmp, 'home');
+fs.mkdirSync(home);
+process.env.HOME = home;
+const HOOK = path.join(home, '.terra-pet', 'terra-hook.sh'); // what settings.json points at
+const REPO_HOOK = path.join(ROOT, 'hooks', 'terra-hook.sh');
+const { status } = require(path.join(ROOT, 'hook-installer.js'));
 const EVENTS = { UserPromptSubmit: 'prompt', PreToolUse: 'tool', Notification: 'notify', Stop: 'stop', StopFailure: 'error', SessionStart: 'session-start' };
 
 function run(script, file) {
-  const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', script), '--settings', file], { encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', script), '--settings', file], { encoding: 'utf8', env: { ...process.env, HOME: home } });
   return { code: r.status, out: (r.stdout + r.stderr).replaceAll(tmp, '<tmp>') };
 }
 const install = (f) => run('install-hooks.js', f);
@@ -34,7 +40,12 @@ function terraEntries(settings) {
 }
 const expectedEntries = Object.fromEntries(Object.keys(EVENTS).sort().map((e) => [e, [EVENTS[e]]]));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const lines = (out, heading) => (out.split(`${heading}:\n`)[1] || '').split('\n').filter((l) => l.startsWith('  ')).map((l) => l.trim().split(':')[0]);
+// Event names listed under a heading such as "Added:", up to the next heading.
+function lines(out, heading) {
+  const after = (out.split(`${heading}:\n`)[1] || '').split('\n');
+  const end = after.findIndex((l) => !l.startsWith('  '));
+  return after.slice(0, end === -1 ? after.length : end).map((l) => l.trim().split(':')[0]);
+}
 
 // Shaped like a real user settings file (fake values).
 const FIXTURE = {
@@ -61,6 +72,9 @@ section('install, install again, uninstall, uninstall again');
   check('StopFailure entry: no matcher, async, runs "error"', !('matcher' in sf) && sf.hooks[0].async === true && sf.hooks[0].command === `/bin/sh '${HOOK}' error`, JSON.stringify(sf));
   const { hooks, ...rest } = after;
   check('every other setting untouched', same(rest, FIXTURE));
+  check('hook script copied to ~/.terra-pet', fs.readFileSync(HOOK, 'utf8') === fs.readFileSync(REPO_HOOK, 'utf8') && (fs.statSync(HOOK).mode & 0o777) === 0o755 && /Hook script: .* \(copied\)/.test(r.out),
+    `${HOOK.replace(home, '<tmp home>')}, mode ${(fs.statSync(HOOK).mode & 0o777).toString(8)}`);
+  check('status: installed', status(file) === 'installed', status(file));
   check('backup made first, with the old content', backups(dir).length === 1 && fs.readFileSync(path.join(dir, backups(dir)[0]), 'utf8') === original, backups(dir).join(', '));
 
   r = install(file);
@@ -68,27 +82,48 @@ section('install, install again, uninstall, uninstall again');
 
   r = uninstall(file);
   check('uninstall removes all 6, incl. StopFailure', r.code === 0 && same(lines(r.out, 'Removed').sort(), Object.keys(EVENTS).sort()), `removed: ${lines(r.out, 'Removed').join(', ')}`);
+  check('uninstall removes the hook script copy', !fs.existsSync(HOOK) && /Hook script: removed/.test(r.out));
+  check('status: not installed', status(file) === 'not installed', status(file));
   check('file is byte-for-byte the original again', fs.readFileSync(file, 'utf8') === original);
   r = uninstall(file);
   check('uninstall again: nothing to do', r.code === 0 && /No Terra hooks found/.test(r.out), r.out.split('\n')[1]);
 }
 
-section('upgrading a step 3 install (no StopFailure yet)');
+// Entries the way the step 3 and 4 installers wrote them: straight to a repo's hooks/ folder.
+function oldInstall(scriptPath, skip = []) {
+  const settings = { ...FIXTURE, hooks: {} };
+  for (const [event, arg] of Object.entries(EVENTS)) {
+    if (skip.includes(event)) continue;
+    const handler = { type: 'command', command: `/bin/sh '${scriptPath}' ${arg}`, async: true, timeout: 5 };
+    const group = { Notification: 'permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog', SessionStart: 'startup|resume|clear' }[event];
+    settings.hooks[event] = [group ? { matcher: group, hooks: [handler] } : { hooks: [handler] }];
+  }
+  return settings;
+}
+
+section('upgrading earlier installs');
 {
   const dir = path.join(tmp, 'upgrade');
   fs.mkdirSync(dir);
   const file = path.join(dir, 'settings.json');
-  const step3 = { ...FIXTURE, hooks: {} };
-  for (const [event, arg] of Object.entries(EVENTS)) {
-    if (event === 'StopFailure') continue;
-    const handler = { type: 'command', command: `/bin/sh '${HOOK}' ${arg}`, async: true, timeout: 5 };
-    const group = { Notification: 'permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog', SessionStart: 'startup|resume|clear' }[event];
-    step3.hooks[event] = [group ? { matcher: group, hooks: [handler] } : { hooks: [handler] }];
-  }
-  fs.writeFileSync(file, `${JSON.stringify(step3, null, 2)}\n`);
-  const r = install(file);
-  check('install adds only StopFailure', r.code === 0 && same(lines(r.out, 'Added'), ['StopFailure']) && !/Removed/.test(r.out) && same(terraEntries(read(file)), expectedEntries),
+  fs.writeFileSync(file, `${JSON.stringify(oldInstall('/somewhere/terra-pet/hooks/terra-hook.sh'), null, 2)}\n`);
+  check('status of a step 4 install: needs update', status(file) === 'needs update', status(file));
+  let r = install(file);
+  check('step 4 install (repo path) -> moved to ~/.terra-pet', r.code === 0 && lines(r.out, 'Removed (old Terra entries)').length === 6 && lines(r.out, 'Added').length === 6 && same(terraEntries(read(file)), expectedEntries),
+    `removed ${lines(r.out, 'Removed (old Terra entries)').length} old entries, added ${lines(r.out, 'Added').length}`);
+  check('status after: installed', status(file) === 'installed', status(file));
+
+  fs.writeFileSync(file, `${JSON.stringify(oldInstall(HOOK, ['StopFailure']), null, 2)}\n`);
+  r = install(file);
+  check('install missing only StopFailure: adds just that', r.code === 0 && same(lines(r.out, 'Added'), ['StopFailure']) && !/Removed/.test(r.out) && same(terraEntries(read(file)), expectedEntries),
     `added: ${lines(r.out, 'Added').join(', ')}`);
+  fs.rmSync(HOOK);
+  check('status with the script copy missing: needs update', status(file) === 'needs update', status(file));
+  r = install(file);
+  check('install again puts the script back', fs.existsSync(HOOK) && /already installed/.test(r.out) && /\(copied\)/.test(r.out), r.out.split('\n')[1]);
+  fs.writeFileSync(path.join(dir, 'bad.json'), '{ nope');
+  check('status of unreadable JSON: unreadable', status(path.join(dir, 'bad.json')) === 'unreadable');
+  check('status reads only, never writes', fs.readFileSync(path.join(dir, 'bad.json'), 'utf8') === '{ nope');
 }
 
 section('symlinked settings.json with your own hooks');
@@ -138,7 +173,7 @@ section('missing file, invalid JSON, old Terra path');
   fs.writeFileSync(moved, JSON.stringify({ hooks: { StopFailure: [{ hooks: [{ type: 'command', command: "/bin/sh '/old/place/hooks/terra-hook.sh' error", async: true }] }] } }));
   r = install(moved);
   const m = read(moved);
-  check('old Terra path replaced, not duplicated', m.hooks.StopFailure.length === 1 && m.hooks.StopFailure[0].hooks[0].command.includes(ROOT) && /Removed \(old Terra entries\)/.test(r.out));
+  check('old Terra path replaced, not duplicated', m.hooks.StopFailure.length === 1 && m.hooks.StopFailure[0].hooks[0].command.includes('.terra-pet/terra-hook.sh') && /Removed \(old Terra entries\)/.test(r.out));
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

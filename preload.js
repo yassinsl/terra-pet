@@ -8,4 +8,5 @@ contextBridge.exposeInMainWorld('terra', {
   onSetState: (callback) => ipcRenderer.on('pet:set-state', (_event, name, options) => callback(name, options)),
   onPlayReaction: (callback) => ipcRenderer.on('pet:play-reaction', (_event, name, options) => callback(name, options)),
   onSetPatrol: (callback) => ipcRenderer.on('pet:set-patrol', (_event, on) => callback(on)),
+  onSetScale: (callback) => ipcRenderer.on('pet:set-scale', (_event, scale) => callback(scale)),
 });

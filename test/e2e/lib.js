@@ -7,10 +7,13 @@ const { ROOT, check, section, summary, wait, isolateHome } = require('../lib.js'
 
 isolateHome('e2e'); // before main.js requires listener.js
 const { app, BrowserWindow, Menu, ipcMain, powerSaveBlocker, screen } = require('electron');
+// A fresh user data folder, so a position or size you saved doesn't leak into the tests.
+const userData = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'terra-e2e-userdata-'));
+app.setPath('userData', userData);
 const ANIMATIONS = require(path.join(ROOT, 'renderer', 'animations.js'));
 const EMOTES = require(path.join(ROOT, 'renderer', 'emotes.js'));
 
-const t = { trayMenu: null, ignoreCalls: [], states: [], win: null, wc: null, consoleLog: [], realMouse: 0 };
+const t = { trayMenu: null, ignoreCalls: [], states: [], win: null, wc: null, consoleLog: [], realMouse: 0, userData };
 
 const realBuild = Menu.buildFromTemplate.bind(Menu);
 Menu.buildFromTemplate = (template) => (t.trayMenu = realBuild(template));
@@ -26,7 +29,7 @@ const DRAW_HOOK = `
   const orig = CanvasRenderingContext2D.prototype.drawImage;
   CanvasRenderingContext2D.prototype.drawImage = function (img, ...a) {
     const m = (img && img.src || '').match(/emotes-only\\/(\\w+)-(\\d+)\\.png$/);
-    window.__draws.push(m ? [performance.now(), 'e', m[1], +m[2]] : [performance.now(), 'p', a[1] / 52, a[0] / 48]);
+    window.__draws.push(m ? [performance.now(), 'e', m[1], +m[2]] : [performance.now(), 'p', a[1] / 52, a[0] / 48, a[4], a[5], a[6]]);
     return orig.call(this, img, ...a);
   };
   // Times the page drew nothing for over 150 ms (the OS sometimes freezes it briefly).
@@ -51,12 +54,12 @@ const subItem = (menu, label) => menuItem(menu).submenu.items.find((i) => i.labe
 const clipMs = (def) => (Array.isArray(def.ms) ? def.ms : Array(def.frames).fill(def.ms));
 
 // Each canvas redraw is one pet cell, optionally followed by one emote frame:
-// [{ t, row, frame, emote: 'hi-3' | null }]
+// [{ t, row, frame, dest: [x, y, width], emote: 'hi-3' | null }]
 async function takeFrames() {
   const draws = await js('window.__draws.splice(0)');
   const frames = [];
   for (const d of draws) {
-    if (d[1] === 'p') frames.push({ t: d[0], row: d[2], frame: d[3], emote: null });
+    if (d[1] === 'p') frames.push({ t: d[0], row: d[2], frame: d[3], dest: [d[4], d[5], d[6]], emote: null });
     else if (frames.length) frames[frames.length - 1].emote = `${d[2]}-${d[3]}`;
   }
   return frames;

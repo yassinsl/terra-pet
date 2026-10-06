@@ -5,3 +5,10 @@
 
 # Dependencies
 node_modules/
+
+# Build output
+dist/
+
+# macOS and editor clutter
+.DS_Store
+*.log

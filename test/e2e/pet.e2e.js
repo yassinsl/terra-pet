@@ -5,12 +5,15 @@ const {
   ROOT, ANIMATIONS, EMOTES, t, check, section, wait, js, current, menuItem, subItem, clipMs,
   takeFrames, segments, emoteRuns, waitFor, attempt, start, BrowserWindow, fs, path,
 } = require('./lib.js');
-const { screen } = require('electron');
+const { screen, nativeImage } = require('electron');
+const { spawn } = require('node:child_process');
+const ws = require(path.join(ROOT, 'window-state.js'));
 
 const OUT = path.join(require('node:os').tmpdir(), 'terra-e2e-captures');
 fs.mkdirSync(OUT, { recursive: true });
 const PET = { x: 32, y: 112, width: 192, height: 208 }; // in the 256x320 window
 const TOL = 34; // ms; frames land on 60 Hz ticks
+const HOOKS_NEEDS_UPDATE = 'Hooks: installed, needs update (install again)';
 
 // Frame order, per-frame timing, play count and what comes next, for one pet animation.
 function checkAnimation(name, frames, { expectEmote = false } = {}) {
@@ -186,7 +189,14 @@ start(async () => {
 
   section('tray');
   const labels = t.trayMenu.items.map((i) => i.label || '---');
-  check('menu items', labels.join(' | ').includes('Play animation | Play reaction | Back to idle | Patrol | --- | Quit'), labels.join(' | '));
+  check('menu items', /^Listening on 127\.0\.0\.1:\d+ \| Hooks: not installed \| --- \| Play animation \| Play reaction \| Back to idle \| --- \| Size \| Patrol \| Start at login \(packaged app only\) \| --- \| Quit$/.test(labels.join(' | ')), labels.join(' | '));
+  const login = menuItem('Start at login (packaged app only)');
+  check('Start at login: off and greyed out with npm start', login && !login.enabled && !login.checked, 'a login item must be an app; with npm start it would be Electron itself');
+  {
+    const icon = nativeImage.createFromPath(path.join(ROOT, 'assets', 'trayTemplate.png'));
+    const { width, height } = icon.getSize();
+    check('tray icon is a template image, 1x and 2x', icon.isTemplateImage() && icon.getScaleFactors().join() === '1,2' && width === 20 && height === 16, `template=${icon.isTemplateImage()}, scale factors ${icon.getScaleFactors()}, ${width}x${height} pt`);
+  }
   const patrolDefault = menuItem('Patrol').checked;
   menuItem('Patrol').click();
   await wait(100);
@@ -408,6 +418,69 @@ start(async () => {
       };
     });
     menuItem('Patrol').click();
+  }
+
+  section('hooks status line (reads ~/.claude/settings.json, a temp one here)');
+  {
+    const settings = path.join(process.env.HOME, '.claude', 'settings.json');
+    const label = () => t.trayMenu.items[1].label;
+    const waitLabel = async (want) => {
+      for (let i = 0; i < 40 && label() !== want; i++) await wait(250);
+      return label();
+    };
+    // process.execPath is Electron here; ELECTRON_RUN_AS_NODE makes it plain Node. Async, so the
+    // main process (and its listener) isn't blocked while the script runs.
+    const npm = (script) => new Promise((resolve) => {
+      spawn(process.execPath, [path.join(ROOT, 'scripts', script)], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore' }).on('close', resolve);
+    });
+    await npm('install-hooks.js');
+    check('  after hooks:install', (await waitLabel('Hooks: installed')) === 'Hooks: installed', label());
+    const s = JSON.parse(fs.readFileSync(settings, 'utf8'));
+    s.hooks.Stop[0].hooks[0].command = "/bin/sh '/old/place/hooks/terra-hook.sh' stop";
+    fs.writeFileSync(settings, JSON.stringify(s));
+    check('  old entry in settings', (await waitLabel(HOOKS_NEEDS_UPDATE)) === HOOKS_NEEDS_UPDATE, label());
+    await npm('uninstall-hooks.js');
+    check('  after hooks:uninstall', (await waitLabel('Hooks: not installed')) === 'Hooks: not installed', label());
+  }
+
+  section('size');
+  await waitFor('idle', 3000);
+  for (const [from, to] of [[4, 2], [2, 3], [3, 4]]) {
+    const before = t.win.getBounds();
+    await takeFrames();
+    subItem('Size', `${to}x`).click();
+    await wait(400);
+    const after = t.win.getBounds();
+    const g = ws.geometry(to);
+    const canvas = await js('[canvas.width, canvas.height]');
+    const f = (await takeFrames()).pop();
+    const radio = menuItem('Size').submenu.items.map((i) => `${i.label}${i.checked ? '*' : ''}`).join(' ');
+    const saved = ws.load(path.join(t.userData, 'window-state.json'));
+    const feetSame = JSON.stringify(ws.feetOf(before)) === JSON.stringify(ws.feetOf(after));
+    check(`  ${from}x -> ${to}x`, after.width === g.width && after.height === g.height && feetSame && canvas.join() === `${g.width},${g.height}`
+      && f && f.dest.join() === `${g.pet.x},${g.pet.y},${g.pet.width}` && radio.includes(`${to}x*`) && saved && saved.scale === to,
+      `window ${after.width}x${after.height}, feet ${feetSame ? 'unchanged' : 'MOVED'}, canvas ${canvas}, pet drawn at ${f && f.dest}, menu ${radio}, saved ${saved && saved.scale}x`);
+    if (to === 2) {
+      const move = async (x, y) => { t.wc.sendInputEvent({ type: 'mouseMove', x, y }); await wait(100); return t.ignoreCalls[t.ignoreCalls.length - 1].ignore; };
+      const onPet = await move(64, 108);
+      const above = await move(64, 20);
+      check('  2x: only the (smaller) pet catches the mouse', onPet === false && above === true, `pet centre ${onPet ? 'pass-through' : 'caught'}, emote area ${above ? 'pass-through' : 'caught'}`);
+    }
+  }
+
+  section('position is remembered');
+  {
+    await waitFor('idle', 3000);
+    const [wx, wy] = t.win.getPosition();
+    t.wc.send('pet:set-patrol', false);
+    const send = (type, gx, gy, extra = {}) => t.wc.sendInputEvent({ type, x: 128, y: 216, globalX: gx, globalY: gy, button: 'left', ...extra });
+    send('mouseDown', wx + 128, wy + 216, { clickCount: 1 });
+    for (let k = 1; k <= 5; k++) { send('mouseMove', wx + 128 - 30 * k, wy + 216 - 10 * k, { modifiers: ['leftButtonDown'] }); await wait(40); }
+    send('mouseUp', wx - 22, wy + 166, { clickCount: 1 });
+    await wait(1500); // saved a second after the last move
+    const saved = ws.load(path.join(t.userData, 'window-state.json'));
+    const feet = ws.feetOf(t.win.getBounds());
+    check('  dragged spot saved in the user data folder', saved && saved.feet.x === feet.x && saved.feet.y === feet.y && saved.scale === 4, `saved ${JSON.stringify(saved)}, window feet ${JSON.stringify(feet)}`);
   }
 
   section('unknown names');

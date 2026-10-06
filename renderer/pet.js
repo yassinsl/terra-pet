@@ -2,22 +2,32 @@
 
 const CELL_W = 48;
 const CELL_H = 52;
-const SCALE = 4;
-// The canvas is the 64x80 emote canvas at 4x, with the pet's cell at (8,28) on it.
-const PET_X = 8 * SCALE;
-const PET_Y = 28 * SCALE;
+// The canvas is the 64x80 emote canvas at `scale` (2x, 3x or 4x; the main process
+// passes it in the page URL and when it changes), with the pet's cell at (8,28) on it.
+let scale = Number(new URLSearchParams(location.search).get('scale')) || 4;
+let PET_X = 8 * scale;
+let PET_Y = 28 * scale;
 
 const BLINK_EVERY = [2500, 5000];    // ms between idle blinks
 const SLEEP_AFTER = 5 * 60 * 1000;   // idle this long with no state change -> sleep
 const PATROL_EVERY = [20000, 40000]; // ms between patrol walks
-const WALK_SPEED = 96;               // px per second
+const WALK_SPEED = 24;               // sprite pixels per second (96 px/s at 4x)
 const DRAG_THRESHOLD = 4;            // px the pointer must move before a press becomes a drag
 const DIZZY_CLICKS = 5;
 const DIZZY_WINDOW = 1500;           // ms
 
 const canvas = document.getElementById('pet');
 const ctx = canvas.getContext('2d');
-ctx.imageSmoothingEnabled = false;
+
+function applyScale(next) {
+  scale = next;
+  PET_X = 8 * scale;
+  PET_Y = 28 * scale;
+  canvas.width = 64 * scale; // resizing resets the context, so set smoothing again
+  canvas.height = 80 * scale;
+  ctx.imageSmoothingEnabled = false;
+  drawn = ''; // force a redraw
+}
 
 const sheet = new Image();
 sheet.src = '../Bot/spritesheet-x1.png';
@@ -134,7 +144,7 @@ function draw() {
   ctx.drawImage(
     sheet,
     frame * CELL_W, clip.row * CELL_H, CELL_W, CELL_H,
-    PET_X, PET_Y, CELL_W * SCALE, CELL_H * SCALE,
+    PET_X, PET_Y, CELL_W * scale, CELL_H * scale,
   );
   if (showEmote) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 }
@@ -250,7 +260,7 @@ function updateWalk(dt) {
   const dx = walk.toX - walk.x;
   const dy = walk.toY - walk.y;
   const dist = Math.hypot(dx, dy);
-  const stepPx = (WALK_SPEED * dt) / 1000;
+  const stepPx = (WALK_SPEED * scale * dt) / 1000;
   if (dist <= stepPx) {
     window.terra.moveWindow(walk.toX, walk.toY);
     walk = null;
@@ -270,7 +280,7 @@ let clickTimes = [];
 // Only the pet's own cell catches the mouse. The main process makes the window
 // ignore the mouse (clicks fall through to whatever is behind) but still forwards
 // moves, so the page reports whether the pointer is over the pet.
-const onPet = (x, y) => x >= PET_X && x < PET_X + CELL_W * SCALE && y >= PET_Y && y < PET_Y + CELL_H * SCALE;
+const onPet = (x, y) => x >= PET_X && x < PET_X + CELL_W * scale && y >= PET_Y && y < PET_Y + CELL_H * scale;
 
 window.addEventListener('mousemove', (e) => {
   if (!press) window.terra.setMouseOverPet(onPet(e.clientX, e.clientY));
@@ -343,6 +353,7 @@ function onClick() {
 
 window.terra.onSetState((name, options) => setState(name, { then: options && options.then }));
 window.terra.onPlayReaction((name, options) => playReaction(name, { then: options && options.then }));
+window.terra.onSetScale((next) => applyScale(next));
 
 window.terra.onSetPatrol((on) => {
   patrolEnabled = on;
@@ -370,4 +381,5 @@ function tick() {
   requestAnimationFrame(tick);
 }
 
+applyScale(scale);
 requestAnimationFrame(tick);

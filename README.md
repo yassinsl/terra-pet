@@ -1,86 +1,208 @@
 # Terra
 
-A pixel-art desktop pet for macOS, built with Electron.
+A little pixel-art robot that lives on your Mac's desktop and keeps you company while you
+work with [Claude Code](https://code.claude.com). It sits down at its computer when Claude
+starts working, asks when Claude needs you, cheers when Claude is done, and waves when you
+say hi.
 
-Terra lives in a small transparent window that stays on top. It waves when it starts,
-idles and blinks, walks along the bottom of the screen now and then, and falls asleep
-after 5 minutes of idling. Reactions show an emote above it: a speech bubble, hearts,
-a lightbulb, stars...
+![Terra's animations](Bot/all-animations.gif)
 
-- Drag Terra to move it. Only Terra itself catches the mouse; clicks anywhere else in its
-  window, including the emote area, go through to whatever is behind.
-- Click it and it loves you; click 5 times fast and it gets dizzy. A click wakes it up.
-- Menu bar icon: the listener status, **Play animation** (any of the 19), **Play reaction**
-  (any of the 8 emotes), **Back to idle**, **Patrol** (walking on/off), **Quit**.
-- With the Claude Code hooks installed, Terra follows what Claude is doing (see below).
+Terra is an Electron app for macOS. It stays on top of your windows in the bottom-right
+corner, out of the way: only Terra itself catches the mouse, and clicks anywhere around it
+go straight through to whatever is behind.
 
-## Run
+## What it does
 
-Requires Node.js and npm.
+- **Idles** and blinks, takes a **walk** along the bottom of the screen now and then, and
+  **falls asleep** after 5 minutes of nothing happening. A click wakes it up.
+- **Reacts** with an emote above its head: a speech bubble, hearts, a lightbulb, stars...
+- **Follows Claude Code** once the hooks are connected (see below).
+- Click it and it loves you. Click it 5 times quickly and it gets dizzy. Drag it anywhere;
+  it remembers the spot (and goes back to the corner if that screen is gone).
+- Menu bar icon: **Play animation** and **Play reaction** to try everything, **Back to idle**,
+  **Size** (2x, 3x or 4x), **Patrol** (walks on or off), **Start at login** and **Quit**. The
+  top of the menu shows whether Terra is listening and whether the hooks are installed.
+
+## Install
+
+### The app
+
+Build the disk image yourself (see [Build the app](#build-the-app)) or take
+`Terra-<version>-arm64.dmg` (Apple Silicon) or `Terra-<version>-x64.dmg` (Intel) from a
+release. Open the `.dmg` and drag **Terra** onto **Applications**.
+
+Terra isn't signed with an Apple developer certificate or notarized, so the first time
+you open it macOS blocks it ("Apple could not verify 'Terra' is free of malware"). To
+open it anyway:
+
+1. Open Terra from Applications once, and click **Done** on the warning.
+2. Open **System Settings > Privacy & Security**, scroll down to *"Terra" was blocked...*,
+   click **Open Anyway** and confirm.
+
+Or, in Terminal: `xattr -dr com.apple.quarantine /Applications/Terra.app`, then open it
+normally. You only have to do this once, and not at all for a copy you built yourself
+(macOS only asks about apps that were downloaded).
+
+Terra has no Dock icon. Look for its face in the menu bar.
+
+### From source
+
+Needs Node.js and npm.
 
 ```sh
+git clone https://github.com/yassinsl/terra-pet.git
+cd terra-pet
 npm install
 npm start
 ```
 
-## Claude Code hooks
+## Connect it to Claude Code
+
+Terra hears about Claude Code through [hooks](https://code.claude.com/docs/en/hooks). One
+command adds them to your Claude Code settings (`~/.claude/settings.json`):
 
 ```sh
-npm run hooks:install     # adds Terra's hooks to ~/.claude/settings.json
-npm run hooks:uninstall   # removes them again
+# the app
+/Applications/Terra.app/Contents/MacOS/Terra --install-hooks
+
+# or from source
+npm run hooks:install
 ```
 
 The installer backs up `settings.json` first (`settings.json.terra-backup-<timestamp>`),
-only adds or removes Terra's own entries, and prints exactly what it changed. Running it
-twice changes nothing. Re-run it if you move this folder. Add `-- --settings <path>` to
-use another settings file.
+adds only Terra's own entries next to whatever you already have, and prints exactly what
+it changed. Running it again changes nothing. It copies the small hook script to
+`~/.terra-pet/terra-hook.sh` and points the hooks there, so they keep working wherever
+the app lives. The menu then says **Hooks: installed**. If it says *needs update*, run the
+command again.
 
-| Claude Code event | Terra |
+The hook never slows Claude Code down: Claude Code doesn't wait for it, it gives up after
+1 second, and it does nothing at all when Terra isn't running.
+
+| When Claude Code... | Terra |
 | :- | :- |
-| `UserPromptSubmit` | a reaction if the prompt has a keyword (`reactions.js`), then sits down to work |
-| `PreToolUse` | sits down to work, unless it already is |
-| `Notification` (Claude is waiting on you) | asks (question mark) |
-| `Stop` | happy, with stars, then idle |
-| `StopFailure` (the turn ended on an API error) | dizzy, then idle |
-| `SessionStart` (startup, resume, clear) | waves |
+| gets your prompt | reacts if the prompt has a trigger word, then sits down to work |
+| uses a tool | sits down to work, unless it already is |
+| needs you (permission, waiting for input) | asks, with a question mark |
+| finishes | is happy, with stars |
+| stops on an API error (rate limit, overload...) | gets dizzy |
+| starts a session | waves |
 
-If Terra sits in work, sitDown, wait, think or ask for 10 minutes with no event (for
-example after you interrupt Claude with Esc, which fires no hook), it goes back to idle.
-**Back to idle** in the menu does the same at once.
+If Terra is left working or waiting for 10 minutes with no news from Claude Code (for
+example after you press Esc, which sends no hook), it gets up and goes back to idle.
+**Back to idle** in the menu does that right away.
 
-`hooks/terra-hook.sh` sends each event to Terra's listener on `127.0.0.1:47800` (or the
-next free port, written to `~/.terra-pet/port`). The hook runs in the background, gives up
-after 1 second and does nothing when Terra isn't running, so it never slows Claude Code
-down. Prompt text is only used for the keyword match; it is never written to disk or logs.
+## Reactions
 
-## Tests
+| Reaction | Emote | Triggered by |
+| :- | :- | :- |
+| `hi` | "HI!" bubble, waving | a prompt with **hi**, **hello**, **hey** or **salam** |
+| `love` | hearts | a prompt with **thanks**, **thank you**, **love** or **great**; clicking Terra |
+| `idea` | lightbulb | a prompt with **idea** or **plan** |
+| `angry` | angry mark | a prompt with **wtf**, **stupid**, **angry** or **broken again** |
+| `stars` | stars, happy | Claude finishing |
+| `ask` | question mark | Claude needing you |
+| `talk` | "..." bubble | the menu only |
+| `sad` | a tear | the menu only |
 
-```sh
-npm test            # everything, about 3 minutes
-npm test -- unit    # only the fast tests (no window)
+Trigger words are matched as whole words, ignoring case, and only in what you typed: text
+you paste into the prompt doesn't count. The first row that matches wins.
+
+### Change the trigger words
+
+The table lives in [`reactions.js`](reactions.js):
+
+```js
+const REACTIONS = [
+  { reaction: 'hi',    words: ['hi', 'hello', 'hey', 'salam'] },
+  { reaction: 'love',  words: ['thanks', 'thank you', 'love', 'great'] },
+  ...
+];
 ```
 
-The end-to-end tests run the real app: a second Terra appears and moves around, so leave
-it alone (they retry a check that was disturbed by your mouse) and keep the screen on.
-They use a temporary home folder, so they don't touch a Terra you are running or its
-port file, and they never touch `~/.claude/settings.json`.
+Add words, add rows, or reorder them. `reaction` must be one of the eight names above.
+Restart Terra to pick up the change.
 
-## Layout
+## Make your own skin or animation
 
-- `main.js`: window, tray menu, mouse pass-through, patrol routes, hook events to states, the 10-minute timeout
-- `listener.js`: the local HTTP listener for hook events
-- `reactions.js`: the prompt keyword table
-- `hooks/terra-hook.sh`: the Claude Code hook script
-- `scripts/`: the hook installer and uninstaller
-- `preload.js`: the IPC bridge between the page and the main process
-- `renderer/animations.js`: the animation table (row, frames, timing, what plays next)
-- `renderer/emotes.js`: the emote table (frames, timing, the pet animation it goes with)
-- `renderer/pet.js`: drawing, the state machine (`setState`, `playReaction`), idle behaviour, clicks and drag
-- `renderer/index.html`: the page with the canvas
-- `test/`: unit tests and end-to-end tests (`test/run.js` runs them all)
-- `Bot/`: art. `Bot/spritesheet-x1.png` (48x52 cells, 8 columns, 19 rows) and
-  `Bot/reactions/emotes-only/<name>-<n>.png` (64x80, the pet's cell sits at 8,28)
+All the art is in [`Bot/`](Bot):
 
-The window is the 64x80 emote canvas at 4x (256x320) with Terra in its bottom 192x208.
-The main process changes the animation over IPC: `pet:set-state` (`setPetState(name)`)
-and `pet:play-reaction` (`playPetReaction(name)`); the tray menu uses the same path.
+- **`Bot/spritesheet-x1.png`**: the pet. 8 columns by 19 rows of 48x52 cells, one animation
+  per row, on a transparent background. To reskin Terra, draw a new sheet with the same
+  layout and replace this file.
+- **`Bot/reactions/emotes-only/<name>-<n>.png`**: the emotes, numbered from 1. Each is a
+  64x80 transparent canvas holding only the emote; the pet's 48x52 cell sits at x=8, y=28
+  on that canvas, so an emote is drawn in the space above and around it.
+
+To add an animation, give it a free row on the sheet and add a line to
+[`renderer/animations.js`](renderer/animations.js):
+
+```js
+dance: { row: 19, frames: 6, ms: 120, plays: 2, next: 'idle' },
+```
+
+`ms` is the time per frame (one number, or one per frame), and an animation either has
+`loop: true` or plays `plays` times and then goes to `next`. It shows up in the menu's
+**Play animation** list by itself.
+
+To add an emote, put its frames in `Bot/reactions/emotes-only/` and add a line to
+[`renderer/emotes.js`](renderer/emotes.js) naming the frame count, the timing and the pet
+animation it goes with. It then appears under **Play reaction**, and you can use its name
+in `reactions.js`.
+
+## Uninstall
+
+1. Remove the hooks: `/Applications/Terra.app/Contents/MacOS/Terra --uninstall-hooks`
+   (or `npm run hooks:uninstall`). Only Terra's entries are removed, and settings.json is
+   backed up first.
+2. If you turned on **Start at login**, turn it off in the menu.
+3. Quit Terra from the menu and drag it from Applications to the Bin.
+4. Optionally delete `~/.terra-pet` (the port file) and
+   `~/Library/Application Support/Terra` (where Terra remembers its spot and size).
+
+## Privacy
+
+Terra runs entirely on your Mac. It has no network code apart from its listener, which
+only accepts connections from your own Mac (`127.0.0.1`), where the hook sends its events. When you send a prompt, the hook passes its text to Terra,
+which checks it for trigger words in memory and then drops it: prompt text is never written
+to disk, logged, or sent anywhere else. Terra stores only its position and size.
+
+## Development
+
+```sh
+npm start         # run from source
+npm test          # every test, about 3 minutes
+npm test -- unit  # the quick ones, no window
+npm run dist      # build dist/Terra-<version>-arm64.dmg and -x64.dmg
+npm run icons     # redraw the app and menu bar icons from the sprite sheet
+```
+
+The end-to-end tests run the real app: a second Terra appears and moves around for a few
+minutes. Leave it alone and keep the screen on. They use temporary folders, so they never
+touch your settings, your saved spot, or a Terra you are running.
+
+### Build the app
+
+`npm run dist` makes one `.dmg` for Apple Silicon and one for Intel in `dist/`. The app is
+signed ad hoc (no certificate; Apple Silicon needs at least that to run it) and not
+notarized, which is why macOS asks you to confirm the first time you open it.
+
+### How it fits together
+
+- `main.js`: the window, menu bar menu, mouse pass-through, patrol routes, hook events to
+  states, and the 10-minute timeout
+- `listener.js`: the local HTTP listener the hook talks to (`127.0.0.1:47800`, or the next
+  free port, written to `~/.terra-pet/port`)
+- `hooks/terra-hook.sh`: the Claude Code hook
+- `hook-installer.js`: adds, removes and checks the hooks (`scripts/` wraps it for npm)
+- `reactions.js`: trigger words
+- `window-state.js`: size, position and remembering them
+- `renderer/`: the page that draws Terra: the state machine, animations and emotes
+- `assets/`: the app and menu bar icons
+- `test/`: unit and end-to-end tests (`test/run.js` runs them all)
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) if you'd like to help.
+
+## License
+
+[MIT](LICENSE). The art in `Bot/` is MIT too ([Bot/LICENSE](Bot/LICENSE)).

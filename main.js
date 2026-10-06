@@ -1,18 +1,14 @@
+const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, screen } = require('electron');
 const ANIMATIONS = require('./renderer/animations.js');
 const EMOTES = require('./renderer/emotes.js');
+const hooks = require('./hook-installer.js');
+const windowState = require('./window-state.js');
 const { HOST, startListener, removePortFile } = require('./listener.js');
 const { matchReaction } = require('./reactions.js');
 
-// The window is the 64x80 emote canvas at 4x. The pet's 48x52 cell sits at (8,28)
-// on it, so the pet is the bottom 192x208 of the window, 32 px in from each side.
-const SCALE = 4;
-const WIDTH = 64 * SCALE;
-const HEIGHT = 80 * SCALE;
-const PET = { x: 8 * SCALE, y: 28 * SCALE, width: 48 * SCALE, height: 52 * SCALE };
-const MARGIN = 24;   // gap between the pet and the edges of the work area
-const MIN_WALK = 96; // shortest patrol walk, in px
+const { MARGIN, SCALES, geometry } = windowState;
 
 // Back to idle when the pet has sat in one of these for this long with no hook event.
 const STUCK_STATES = new Set(['work', 'sitDown', 'wait', 'think', 'ask']);
@@ -21,12 +17,29 @@ const STUCK_CHECK_EVERY = 15 * 1000;
 
 let win = null;
 let tray = null; // kept at module level so it isn't garbage-collected
+let scale = windowState.DEFAULT_SCALE; // 2x, 3x or 4x: one sprite pixel is `scale` px
 let patrolEnabled = true;
 let listener = null;      // { server, port } once listening
 let listenerError = null;
+let hooksStatus = 'not installed';
 let pet = { state: null, next: null, since: Date.now() }; // as last reported by the renderer
 let lastEventAt = Date.now();
 let mouseOnPet = false;
+let saveTimer = null;
+
+// The packaged app has no npm scripts, so it takes these instead:
+//   Terra --install-hooks | --uninstall-hooks [--settings <path>]
+// It prints what it changed and quits without showing the pet.
+const cliFlag = ['--install-hooks', '--uninstall-hooks'].find((flag) => process.argv.includes(flag));
+if (cliFlag) runCli(cliFlag);
+else startApp();
+
+function runCli(flag) {
+  const settings = hooks.settingsPathFromArgs(process.argv);
+  const { code, text } = flag === '--install-hooks' ? hooks.install(settings) : hooks.uninstall(settings);
+  fs.writeSync(code ? 2 : 1, `${text}\n`);
+  app.exit(code);
+}
 
 function sendToPet(channel, ...args) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, ...args);
@@ -95,21 +108,56 @@ function setMouseOnPet(on) {
 }
 
 function cursorOnPet() {
+  const { pet: box } = geometry(scale);
   const cursor = screen.getCursorScreenPoint();
   const [x, y] = win.getPosition();
   const cx = cursor.x - x;
   const cy = cursor.y - y;
-  return cx >= PET.x && cx < PET.x + PET.width && cy >= PET.y && cy < PET.y + PET.height;
+  return cx >= box.x && cx < box.x + box.width && cy >= box.y && cy < box.y + box.height;
+}
+
+// ---- Remembering position and size (in the app's user data folder) ----
+
+const stateFile = () => path.join(app.getPath('userData'), 'window-state.json');
+
+function saveState() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  if (!win || win.isDestroyed()) return;
+  try {
+    windowState.save(stateFile(), { bounds: win.getBounds(), scale });
+  } catch (err) {
+    console.error('Terra could not save its position:', err.message);
+  }
+}
+
+// Moves come in bursts (dragging, walking), so save a moment after the last one.
+function saveSoon() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveState, 1000);
+}
+
+// Resizes around the pet's feet, so it stays standing on the same spot.
+function setScale(next) {
+  if (!win || next === scale || !SCALES.includes(next)) return;
+  const feet = windowState.feetOf(win.getBounds());
+  scale = next;
+  win.setBounds(windowState.boundsAt(feet, scale));
+  sendToPet('pet:set-scale', scale);
+  saveState();
+  updateTrayMenu();
 }
 
 function createWindow() {
-  const { workArea } = screen.getPrimaryDisplay();
+  const start = windowState.startBounds(
+    windowState.load(stateFile()),
+    screen.getAllDisplays().map((d) => d.workArea),
+    screen.getPrimaryDisplay().workArea,
+  );
+  scale = start.scale;
 
   win = new BrowserWindow({
-    width: WIDTH,
-    height: HEIGHT,
-    x: workArea.x + workArea.width - MARGIN - PET.width - PET.x,
-    y: workArea.y + workArea.height - MARGIN - HEIGHT,
+    ...start.bounds,
     transparent: true,
     backgroundColor: '#00000000',
     frame: false,
@@ -134,20 +182,37 @@ function createWindow() {
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setIgnoreMouseEvents(true, { forward: true });
 
-  win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  win.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: { scale: String(scale) } });
   win.once('ready-to-show', () => win.showInactive());
   win.webContents.on('did-finish-load', () => sendToPet('pet:set-patrol', patrolEnabled));
+  win.on('move', saveSoon);
 }
 
-function createTray() {
-  const src = nativeImage.createFromPath(path.join(__dirname, 'Bot', 'terra-bot-48x52.png'));
-  const icon = nativeImage.createEmpty();
-  icon.addRepresentation({ scaleFactor: 1, buffer: src.resize({ height: 18 }).toPNG() });
-  icon.addRepresentation({ scaleFactor: 2, buffer: src.resize({ height: 36 }).toPNG() });
+// ---- Tray ----
 
+function createTray() {
+  // A template image (black + alpha) that macOS tints for light and dark menu bars;
+  // trayTemplate@2x.png next to it is picked up for Retina screens.
+  const icon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'trayTemplate.png'));
+  icon.setTemplateImage(true);
   tray = new Tray(icon);
   tray.setToolTip('Terra');
   updateTrayMenu();
+}
+
+const HOOKS_LABEL = {
+  installed: 'Hooks: installed',
+  'not installed': 'Hooks: not installed',
+  'needs update': 'Hooks: installed, needs update (install again)',
+  unreadable: "Hooks: can't read ~/.claude/settings.json",
+};
+
+// Reads ~/.claude/settings.json (never changes it) and updates the tray when the answer changes.
+function refreshHooksStatus() {
+  const next = hooks.status();
+  if (next === hooksStatus) return;
+  hooksStatus = next;
+  if (tray) updateTrayMenu();
 }
 
 function updateTrayMenu() {
@@ -157,6 +222,7 @@ function updateTrayMenu() {
 
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: status, enabled: false },
+    { label: HOOKS_LABEL[hooksStatus], enabled: false },
     { type: 'separator' },
     {
       label: 'Play animation',
@@ -167,6 +233,11 @@ function updateTrayMenu() {
       submenu: Object.keys(EMOTES).map((name) => ({ label: name, click: () => playPetReaction(name) })),
     },
     { label: 'Back to idle', click: backToIdle },
+    { type: 'separator' },
+    {
+      label: 'Size',
+      submenu: SCALES.map((s) => ({ label: `${s}x`, type: 'radio', checked: s === scale, click: () => setScale(s) })),
+    },
     {
       label: 'Patrol',
       type: 'checkbox',
@@ -176,71 +247,92 @@ function updateTrayMenu() {
         sendToPet('pet:set-patrol', patrolEnabled);
       },
     },
+    // A login item has to be an app; with `npm start` it would be Electron itself.
+    {
+      label: app.isPackaged ? 'Start at login' : 'Start at login (packaged app only)',
+      type: 'checkbox',
+      enabled: app.isPackaged,
+      checked: app.isPackaged && app.getLoginItemSettings().openAtLogin,
+      click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
+    },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]));
 }
 
-ipcMain.on('pet:state', (event, state, next) => {
-  if (!win || event.sender !== win.webContents) return;
-  pet = { state, next, since: state === pet.state ? pet.since : Date.now() };
-});
+// ---- Start ----
 
-ipcMain.on('pet:mouse-over-pet', (event, on) => {
-  if (!win || event.sender !== win.webContents) return;
-  setMouseOnPet(on === true);
-});
+function startApp() {
+  ipcMain.on('pet:state', (event, state, next) => {
+    if (!win || event.sender !== win.webContents) return;
+    pet = { state, next, since: state === pet.state ? pet.since : Date.now() };
+  });
 
-// The renderer sends the new top-left corner while the pet is dragged or walking.
-ipcMain.on('pet:move', (event, x, y) => {
-  if (!win || event.sender !== win.webContents) return;
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-  win.setPosition(Math.round(x), Math.round(y));
-  // The pet may have walked out from under (or in under) a still cursor.
-  setMouseOnPet(cursorOnPet());
-});
+  ipcMain.on('pet:mouse-over-pet', (event, on) => {
+    if (!win || event.sender !== win.webContents) return;
+    setMouseOnPet(on === true);
+  });
 
-// Picks where the next patrol walk goes: a random x along the bottom of the
-// work area of the display the pet is on. Positions are the window's top-left;
-// the pet (not the transparent margin around it) stays inside the work area.
-ipcMain.handle('pet:patrol-route', (event) => {
-  if (!win || event.sender !== win.webContents) return null;
-  const [x, y] = win.getPosition();
-  const { workArea } = screen.getDisplayMatching(win.getBounds());
-  const minX = workArea.x + MARGIN - PET.x;
-  const maxX = workArea.x + workArea.width - MARGIN - PET.width - PET.x;
-  let toX = x;
-  for (let tries = 0; tries < 10 && Math.abs(toX - x) < MIN_WALK; tries++) {
-    toX = Math.round(minX + Math.random() * (maxX - minX));
-  }
-  const toY = workArea.y + workArea.height - MARGIN - HEIGHT;
-  return { from: { x, y }, to: { x: toX, y: toY } };
-});
+  // The renderer sends the new top-left corner while the pet is dragged or walking.
+  ipcMain.on('pet:move', (event, x, y) => {
+    if (!win || event.sender !== win.webContents) return;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    win.setPosition(Math.round(x), Math.round(y));
+    // The pet may have walked out from under (or in under) a still cursor.
+    setMouseOnPet(cursorOnPet());
+  });
 
-app.whenReady().then(async () => {
-  // Hides the app from the Dock and the Cmd+Tab switcher.
-  if (app.dock) app.dock.hide();
-  createWindow();
-  createTray();
-  setInterval(checkStuck, STUCK_CHECK_EVERY);
-  try {
-    listener = await startListener(onHookEvent);
-  } catch (err) {
-    listenerError = err.message;
-    console.error('Terra listener not started:', err.message);
-  }
-  updateTrayMenu();
-});
+  // Picks where the next patrol walk goes: a random x along the bottom of the
+  // work area of the display the pet is on. Positions are the window's top-left;
+  // the pet (not the transparent margin around it) stays inside the work area.
+  ipcMain.handle('pet:patrol-route', (event) => {
+    if (!win || event.sender !== win.webContents) return null;
+    const g = geometry(scale);
+    const [x, y] = win.getPosition();
+    const { workArea } = screen.getDisplayMatching(win.getBounds());
+    const minX = workArea.x + MARGIN - g.pet.x;
+    const maxX = workArea.x + workArea.width - MARGIN - g.pet.width - g.pet.x;
+    let toX = x;
+    for (let tries = 0; tries < 10 && Math.abs(toX - x) < 24 * scale; tries++) {
+      toX = Math.round(minX + Math.random() * (maxX - minX));
+    }
+    const toY = workArea.y + workArea.height - MARGIN - g.height;
+    return { from: { x, y }, to: { x: toX, y: toY } };
+  });
 
-// Ctrl+C in the terminal running `npm start`, or a kill, should quit the normal way
-// too, so the port file is removed and hooks don't keep aiming at a closed port.
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => app.quit());
+  app.whenReady().then(async () => {
+    // Hides the app from the Dock and the Cmd+Tab switcher.
+    if (app.dock) app.dock.hide();
+    try {
+      hooks.refreshHookScript(); // keep an installed hook script in step with this version
+    } catch (err) {
+      console.error('Terra could not update its hook script:', err.message);
+    }
+    hooksStatus = hooks.status();
+    createWindow();
+    createTray();
+    setInterval(checkStuck, STUCK_CHECK_EVERY);
+    for (const file of [hooks.defaultSettingsPath(), hooks.hookCopyPath()]) fs.watchFile(file, { interval: 2000 }, refreshHooksStatus);
+    try {
+      listener = await startListener(onHookEvent);
+    } catch (err) {
+      listenerError = err.message;
+      console.error('Terra listener not started:', err.message);
+    }
+    updateTrayMenu();
+  });
 
-app.on('will-quit', () => {
-  if (!listener) return;
-  listener.server.close();
-  removePortFile(listener.port);
-});
+  // Ctrl+C in the terminal running `npm start`, or a kill, should quit the normal way
+  // too, so the port file is removed and hooks don't keep aiming at a closed port.
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => app.quit());
 
-// Keep running with no windows; Quit lives in the tray menu.
-app.on('window-all-closed', () => {});
+  app.on('before-quit', saveState); // windows are already gone by will-quit
+  app.on('will-quit', () => {
+    if (!listener) return;
+    listener.server.close();
+    removePortFile(listener.port);
+  });
+
+  // Keep running with no windows; Quit lives in the tray menu.
+  app.on('window-all-closed', () => {});
+}
