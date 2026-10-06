@@ -189,7 +189,7 @@ start(async () => {
 
   section('tray');
   const labels = t.trayMenu.items.map((i) => i.label || '---');
-  check('menu items', /^Listening on 127\.0\.0\.1:\d+ \| Hooks: not installed \| --- \| Play animation \| Play reaction \| Back to idle \| --- \| Size \| Patrol \| Start at login \(packaged app only\) \| --- \| Quit$/.test(labels.join(' | ')), labels.join(' | '));
+  check('menu items', /^Listening on 127\.0\.0\.1:\d+ \| Hooks: not installed \| Claude desktop: not installed \| --- \| Play animation \| Play reaction \| Back to idle \| --- \| Size \| Patrol \| Start at login \(packaged app only\) \| --- \| Install in Claude desktop \| Uninstall from Claude desktop \| --- \| Quit$/.test(labels.join(' | ')), labels.join(' | '));
   const login = menuItem('Start at login (packaged app only)');
   check('Start at login: off and greyed out with npm start', login && !login.enabled && !login.checked, 'a login item must be an app; with npm start it would be Electron itself');
   {
@@ -445,26 +445,106 @@ start(async () => {
 
   section('size');
   await waitFor('idle', 3000);
-  for (const [from, to] of [[4, 2], [2, 3], [3, 4]]) {
+  const dpr = await js('devicePixelRatio');
+  const sizes = menuItem('Size').submenu.items.map((i) => i.label);
+  check('menu: 1x and 1.5x above 2x, 3x and 4x', sizes.join(' ') === '1x 1.5x 2x 3x 4x', `${sizes.join(' ')}; screen pixel ratio ${dpr}`);
+  // Moves the page's pointer to (x,y); true when clicks there go through to what is behind.
+  const passesThrough = async (x, y) => { t.wc.sendInputEvent({ type: 'mouseMove', x, y }); await wait(100); return t.ignoreCalls[t.ignoreCalls.length - 1].ignore; };
+  for (const [from, to] of [[4, 1.5], [1.5, 1], [1, 2], [2, 3], [3, 4]]) {
     const before = t.win.getBounds();
     await takeFrames();
     subItem('Size', `${to}x`).click();
     await wait(400);
     const after = t.win.getBounds();
     const g = ws.geometry(to);
-    const canvas = await js('[canvas.width, canvas.height]');
+    const p = g.pet;
+    const k = to * dpr; // device pixels per art pixel
+    // On screen the canvas is the window's size; its own pixels are device pixels.
+    const canvas = await js('[canvas.clientWidth, canvas.clientHeight, canvas.width, canvas.height]');
     const f = (await takeFrames()).pop();
     const radio = menuItem('Size').submenu.items.map((i) => `${i.label}${i.checked ? '*' : ''}`).join(' ');
     const saved = ws.load(path.join(t.userData, 'window-state.json'));
     const feetSame = JSON.stringify(ws.feetOf(before)) === JSON.stringify(ws.feetOf(after));
-    check(`  ${from}x -> ${to}x`, after.width === g.width && after.height === g.height && feetSame && canvas.join() === `${g.width},${g.height}`
-      && f && f.dest.join() === `${g.pet.x},${g.pet.y},${g.pet.width}` && radio.includes(`${to}x*`) && saved && saved.scale === to,
-      `window ${after.width}x${after.height}, feet ${feetSame ? 'unchanged' : 'MOVED'}, canvas ${canvas}, pet drawn at ${f && f.dest}, menu ${radio}, saved ${saved && saved.scale}x`);
-    if (to === 2) {
-      const move = async (x, y) => { t.wc.sendInputEvent({ type: 'mouseMove', x, y }); await wait(100); return t.ignoreCalls[t.ignoreCalls.length - 1].ignore; };
-      const onPet = await move(64, 108);
-      const above = await move(64, 20);
-      check('  2x: only the (smaller) pet catches the mouse', onPet === false && above === true, `pet centre ${onPet ? 'pass-through' : 'caught'}, emote area ${above ? 'pass-through' : 'caught'}`);
+    const savedHere = saved && saved.scale === to && JSON.stringify(saved.feet) === JSON.stringify(ws.feetOf(after));
+    check(`  ${from}x -> ${to}x`, after.width === g.width && after.height === g.height && feetSame
+      && canvas.join() === [g.width, g.height, Math.round(g.width * dpr), Math.round(g.height * dpr)].join()
+      && f && f.dest.join() === [8 * k, 28 * k, 48 * k].join() && radio.includes(`${to}x*`) && savedHere,
+      `window ${after.width}x${after.height}, feet ${feetSame ? 'unchanged' : 'MOVED'}, canvas ${canvas[0]}x${canvas[1]} (${canvas[2]}x${canvas[3]} device px), pet drawn at ${f && f.dest} device px, menu ${radio}, saved ${saved && saved.scale}x ${savedHere ? 'at these feet' : 'ELSEWHERE'}`);
+
+    const spots = [['pet centre', p.x + p.width / 2, p.y + p.height / 2, false], ['pet top-left corner', p.x, p.y, false],
+      ['pet bottom-right corner', p.x + p.width - 1, p.y + p.height - 1, false], ['just left of the pet', p.x - 1, p.y + p.height / 2, true],
+      ['just above the pet', p.x + p.width / 2, p.y - 1, true], ['emote area', g.width / 2, p.y / 2, true]];
+    const wrong = [];
+    for (const [label, x, y, through] of spots) if ((await passesThrough(x, y)) !== through) wrong.push(label);
+    check(`  ${to}x: only the pet catches the mouse`, !wrong.length, wrong.length ? `wrong at: ${wrong.join(', ')}` : `${spots.length} spots: the pet's edges catch it, around and above pass through`);
+    if (to >= 2) continue;
+
+    // The new small sizes: clicks, sharpness with the emote in place, patrol, pixel ratio changes.
+    await attempt(`  ${to}x: a click on the pet plays love, beside it does nothing`, async () => {
+      await waitFor('idle', 3000);
+      await takeFrames();
+      await click(p.x - 2, p.y + p.height / 2);
+      await wait(400);
+      const beside = (await takeFrames()).some((x) => x.row === ANIMATIONS.love.row);
+      await click(p.x + p.width / 2, p.y + p.height / 2);
+      await wait(400);
+      const on = (await takeFrames()).some((x) => x.row === ANIMATIONS.love.row);
+      await waitFor('idle', 3000);
+      return { ok: on && !beside, line: `on the pet: ${on ? 'love' : 'nothing'}, beside it: ${beside ? 'love' : 'nothing'}` };
+    });
+
+    if (Number.isInteger(k)) {
+      const cap = await captureReaction('hi');
+      const cmp = cap && await compareCapture(cap.png, cap.row, cap.frame, cap.emote);
+      const file = path.join(OUT, `size-${to}x-hi.png`);
+      if (cap) fs.writeFileSync(file, cap.png);
+      check(`  ${to}x: capture matches cell at (8,28) + emote, whole pixels`, cmp && cmp.off === 0 && cmp.blocky === 0 && cmp.scale === k && cap.emote,
+        cap ? `pet row ${cap.row} frame ${cap.frame} + ${cap.emote}; ${cmp.off} of 5120 pixels differ, ${cmp.blocky} blurry blocks, ${cmp.scale}x${cmp.scale} device pixels per art pixel; saved ${file}` : 'could not get a stable frame');
+      await wait(2000);
+    } else {
+      check(`  ${to}x: capture (skipped: pixel ratio ${dpr} can't give whole pixels)`, true, `${k} device pixels per art pixel`);
+    }
+
+    const routes = [];
+    for (let i = 0; i < 20; i++) routes.push(await js('window.terra.patrolRoute()'));
+    const [x0, y0] = t.win.getPosition();
+    const badRoutes = routes.filter((r) => r.from.x !== x0 || r.from.y !== y0 || r.to.y + g.height !== wa.y + wa.height - 24
+      || r.to.x + p.x < wa.x + 24 || r.to.x + p.x + p.width > wa.x + wa.width - 24);
+    const xs = routes.map((r) => r.to.x + p.x);
+    check(`  ${to}x: patrol routes end on the bottom margin, pet 24 px inside the work area`, !badRoutes.length,
+      `${routes.length} routes, pet left edge ${Math.min(...xs)}..${Math.max(...xs)} (work area ${wa.x + 24}..${wa.x + wa.width - 24 - p.width}), window bottom ${routes[0].to.y + g.height}${badRoutes.length ? `; bad: ${JSON.stringify(badRoutes[0])}` : ''}`);
+    await attempt(`  ${to}x: patrol walks at ${24 * to} px/s`, async () => {
+      await waitFor('idle', 3000);
+      menuItem('Patrol').click(); // on
+      const moves = [];
+      const onMove = () => { const [x, y] = t.win.getPosition(); moves.push({ t: Date.now(), x, y }); };
+      t.win.on('move', onMove);
+      await js('nextPatrolAt = 0');
+      await wait(2000);
+      t.win.off('move', onMove);
+      const walkState = await js('state');
+      await js("setState('idle')");
+      menuItem('Patrol').click(); // off
+      const first = moves[0];
+      const last = moves[moves.length - 1];
+      if (!first || last === first) return { ok: false, line: `${moves.length} moves, state ${walkState}` };
+      const speed = Math.hypot(last.x - first.x, last.y - first.y) / ((last.t - first.t) / 1000);
+      const inside = moves.every((m) => m.x + p.x >= wa.x && m.x + p.x + p.width <= wa.x + wa.width && m.y + p.y >= wa.y && m.y + g.height <= wa.y + wa.height);
+      return { ok: inside && Math.abs(speed - 24 * to) < 2.4 * to + 1, line: `${walkState}, ${moves.length} moves at ${speed.toFixed(1)} px/s, pet inside work area=${inside}` };
+    });
+
+    if (to === 1.5) {
+      // As if the window moved to a screen with another pixel ratio, then back.
+      const other = dpr === 1 ? 2 : 1;
+      const look = async () => { await wait(300); const c = await js('[devicePixelRatio, canvas.width, canvas.height]'); return [...c, ((await takeFrames()).pop() || { dest: [] }).dest.join()]; };
+      await takeFrames();
+      await t.wc.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: other, mobile: false });
+      const there = await look();
+      await t.wc.debugger.sendCommand('Emulation.clearDeviceMetricsOverride');
+      const back = await look();
+      const fits = (r, ratio) => r.slice(0, 4).join() === [ratio, g.width * ratio, g.height * ratio, [8, 28, 48].map((v) => v * to * ratio).join()].join();
+      check(`  ${to}x: canvas follows the screen's pixel ratio`, fits(there, other) && fits(back, dpr),
+        `ratio ${other}: canvas ${there[1]}x${there[2]}, pet at ${there[3]}; back to ${dpr}: ${back[1]}x${back[2]}, pet at ${back[3]}`);
     }
   }
 

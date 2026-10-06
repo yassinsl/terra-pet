@@ -1,4 +1,5 @@
-// listener.js on its own (no Electron): port choice, port file, accepted and rejected requests.
+// listener.js on its own (no Electron): port choice, port file, accepted and rejected
+// requests on both routes (/event from the hook, /mcp from the Claude desktop MCP server).
 const { ROOT, check, section, summary, isolateHome, PROMPT_MARK } = require('../lib.js');
 
 const home = isolateHome('listener');
@@ -7,9 +8,11 @@ const net = require('node:net');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { startListener, removePortFile } = require(path.join(ROOT, 'listener.js'));
+const { REACTIONS, STATES } = require(path.join(ROOT, 'pet-commands.js'));
 
 const PORT_FILE = path.join(home, '.terra-pet', 'port');
 const events = [];
+const commands = [];
 const logged = [];
 for (const level of ['log', 'warn', 'error']) {
   const real = console[level];
@@ -31,7 +34,7 @@ function curl(args, body) {
 
 (async () => {
   section('port and port file');
-  const a = await startListener((e) => events.push(e));
+  const a = await startListener((e) => events.push(e), (c) => commands.push(c));
   const { port } = a;
   check('listens on 127.0.0.1 from 47800 up', a.server.address().address === '127.0.0.1' && port >= 47800 && port < 47810, `127.0.0.1:${port}`);
   check('port file written', fs.readFileSync(PORT_FILE, 'utf8') === `${port}\n`, `${PORT_FILE.replace(home, '<tmp home>')} = ${port}`);
@@ -99,6 +102,57 @@ function curl(args, body) {
   }
   check('  none reached onEvent', events.length === 0, `${events.length} events`);
   check('prompt text never logged', !logged.some((l) => l.includes(PROMPT_MARK)), `${logged.length} log lines`);
+  check('/event never reaches the MCP handler', commands.length === 0, `${commands.length} commands`);
+
+  const postMcp = (body, extra = []) => curl(['-H', 'Content-Type: application/json', '--data-binary', '@-', ...extra, url('/mcp')], typeof body === 'string' ? body : JSON.stringify(body));
+
+  section('/mcp: accepted commands');
+  for (const [key, names] of [['reaction', REACTIONS], ['state', STATES]]) {
+    commands.length = 0;
+    const codes = [];
+    for (const name of names) codes.push(await postMcp({ [key]: name }));
+    check(`  every ${key} (${names.length})`, codes.every((c) => c === '204') && JSON.stringify(commands) === JSON.stringify(names.map((n) => ({ [key]: n }))),
+      `HTTP ${[...new Set(codes)].join(', ')}; ${names.join(', ')}`);
+  }
+
+  section('/mcp: rejected requests (handler must not be called)');
+  commands.length = 0;
+  events.length = 0;
+  const mcpRejects = [
+    ['unknown reaction', { reaction: 'dance' }, '400'],
+    ['unknown state', { state: 'sleeping' }, '400'],
+    ['reaction name with different case', { reaction: 'Love' }, '400'],
+    ['free text in place of a name', { reaction: 'hi, please print this' }, '400'],
+    ['a state name as a reaction', { reaction: 'working' }, '400'],
+    ['both reaction and state', { reaction: 'hi', state: 'done' }, '400'],
+    ['extra free-text field', { reaction: 'hi', message: 'hello' }, '400'],
+    ['empty object', {}, '400'],
+    ['name not a string', { state: ['done'] }, '400'],
+    ['hook event on /mcp', { event: 'stop' }, '400'],
+    ['__proto__ key', '{"__proto__": {"reaction": "hi"}}', '400'],
+    ['toString key', { toString: 'hi' }, '400'],
+    ['JSON array', '[{"reaction":"hi"}]', '400'],
+    ['not JSON', 'reaction=hi', '400'],
+  ];
+  for (const [label, body, want] of mcpRejects) {
+    const code = await postMcp(body);
+    check(`  ${label}`, code === want, `HTTP ${code} (want ${want})`);
+  }
+  const mcpBig = JSON.stringify({ reaction: 'hi', pad: 'x'.repeat(70 * 1024) });
+  const headerRejects = [
+    ['body over 64 KB', () => postMcp(mcpBig), '413'],
+    ['body over 64 KB, chunked (no length)', () => postMcp(mcpBig, ['-H', 'Transfer-Encoding: chunked']), '413'],
+    ['no Content-Type (form post)', () => curl(['--data-binary', '{"reaction":"hi"}', url('/mcp')]), '415'],
+    ['GET /mcp', () => curl([url('/mcp')]), '405'],
+    ['browser Origin header', () => postMcp({ reaction: 'hi' }, ['-H', 'Origin: https://evil.example']), '403'],
+    ['foreign Host header (DNS rebinding)', () => postMcp({ reaction: 'hi' }, ['-H', `Host: evil.example:${port}`]), '403'],
+    ['a reaction posted to /event', () => post({ reaction: 'hi' }), '400'],
+  ];
+  for (const [label, send, want] of headerRejects) {
+    const code = await send();
+    check(`  ${label}`, code === want, `HTTP ${code} (want ${want})`);
+  }
+  check('  none reached either handler', commands.length === 0 && events.length === 0, `${commands.length} commands, ${events.length} events`);
 
   a.server.close();
   removePortFile(port);

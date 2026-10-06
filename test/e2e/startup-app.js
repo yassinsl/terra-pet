@@ -8,7 +8,8 @@ require(path.join(__dirname, '..', '..', 'main.js'));
 
 app.on('browser-window-created', (_e, win) => {
   win.webContents.once('did-finish-load', async () => {
-    const page = await win.webContents.executeJavaScript('({ scale, canvas: [canvas.width, canvas.height] })');
+    // canvas: its size on screen (CSS pixels, the window's points); backing: its own pixels.
+    const page = await win.webContents.executeJavaScript('({ scale, dpr: devicePixelRatio, canvas: [canvas.clientWidth, canvas.clientHeight], backing: [canvas.width, canvas.height] })');
     process.stdout.write(`RESULT ${JSON.stringify({ bounds: win.getBounds(), ...page })}\n`);
     app.exit(0);
   });

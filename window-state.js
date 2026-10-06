@@ -1,12 +1,13 @@
 // Where the pet's window goes, and remembering it between launches.
 //
-// The window is the 64x80 emote canvas at the chosen size (2x, 3x or 4x), with the
-// pet's 48x52 cell at (8,28) on it, so the pet's feet are the window's bottom centre.
+// The window is the 64x80 emote canvas at the chosen size (1x, 1.5x, 2x, 3x or 4x),
+// with the pet's 48x52 cell at (8,28) on it, so the pet's feet are the window's bottom
+// centre. Every size gives whole points (even 1.5x: 96x120, pet 72x78 at (12,42)).
 // What gets saved is that point plus the size: changing size keeps the feet in place.
 const fs = require('node:fs');
 const path = require('node:path');
 
-const SCALES = [2, 3, 4];
+const SCALES = [1, 1.5, 2, 3, 4]; // in tray menu order
 const DEFAULT_SCALE = 4;
 const MARGIN = 24; // gap between the pet and the edges of the work area
 

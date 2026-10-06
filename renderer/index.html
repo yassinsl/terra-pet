@@ -16,7 +16,8 @@
       }
       canvas {
         display: block;
-        /* Keeps pixels sharp when the display scales the canvas (Retina). */
+        /* pet.js gives the canvas one pixel per device pixel; if the screen ever has to
+           scale it anyway (a pixel ratio that isn't whole), this keeps it blocky, not blurred. */
         image-rendering: pixelated;
         cursor: grab;
       }

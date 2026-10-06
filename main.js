@@ -1,9 +1,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, screen } = require('electron');
+const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, screen } = require('electron');
 const ANIMATIONS = require('./renderer/animations.js');
 const EMOTES = require('./renderer/emotes.js');
 const hooks = require('./hook-installer.js');
+const mcp = require('./mcp-installer.js');
 const windowState = require('./window-state.js');
 const { HOST, startListener, removePortFile } = require('./listener.js');
 const { matchReaction } = require('./reactions.js');
@@ -14,14 +15,18 @@ const { MARGIN, SCALES, geometry } = windowState;
 const STUCK_STATES = new Set(['work', 'sitDown', 'wait', 'think', 'ask']);
 const STUCK_AFTER = 10 * 60 * 1000;
 const STUCK_CHECK_EVERY = 15 * 1000;
+// How long a looping reaction (talk, sad, ask) asked for by Claude desktop plays.
+const LOOP_REACTION_MS = 4000;
 
 let win = null;
 let tray = null; // kept at module level so it isn't garbage-collected
-let scale = windowState.DEFAULT_SCALE; // 2x, 3x or 4x: one sprite pixel is `scale` px
+let scale = windowState.DEFAULT_SCALE; // 1x to 4x (SCALES): one sprite pixel is `scale` points
 let patrolEnabled = true;
 let listener = null;      // { server, port } once listening
 let listenerError = null;
 let hooksStatus = 'not installed';
+let mcpStatus = 'not installed';
+let loopReactionTimer = null;
 let pet = { state: null, next: null, since: Date.now() }; // as last reported by the renderer
 let lastEventAt = Date.now();
 let mouseOnPet = false;
@@ -29,14 +34,20 @@ let saveTimer = null;
 
 // The packaged app has no npm scripts, so it takes these instead:
 //   Terra --install-hooks | --uninstall-hooks [--settings <path>]
+//   Terra --install-mcp | --uninstall-mcp [--config <path>]
 // It prints what it changed and quits without showing the pet.
-const cliFlag = ['--install-hooks', '--uninstall-hooks'].find((flag) => process.argv.includes(flag));
+const CLI = {
+  '--install-hooks': () => hooks.install(hooks.settingsPathFromArgs(process.argv)),
+  '--uninstall-hooks': () => hooks.uninstall(hooks.settingsPathFromArgs(process.argv)),
+  '--install-mcp': () => mcp.install(mcp.configPathFromArgs(process.argv)),
+  '--uninstall-mcp': () => mcp.uninstall(mcp.configPathFromArgs(process.argv)),
+};
+const cliFlag = Object.keys(CLI).find((flag) => process.argv.includes(flag));
 if (cliFlag) runCli(cliFlag);
 else startApp();
 
 function runCli(flag) {
-  const settings = hooks.settingsPathFromArgs(process.argv);
-  const { code, text } = flag === '--install-hooks' ? hooks.install(settings) : hooks.uninstall(settings);
+  const { code, text } = CLI[flag]();
   fs.writeSync(code ? 2 : 1, `${text}\n`);
   app.exit(code);
 }
@@ -61,10 +72,13 @@ function backToIdle() {
   setPetState('idle');
 }
 
+const busy = (s) => s === 'work' || s === 'sitDown';
+const working = () => busy(pet.state) || busy(pet.next);
+
 // Claude Code hook events -> pet states.
 function onHookEvent({ event, prompt }) {
   lastEventAt = Date.now();
-  const busy = (s) => s === 'work' || s === 'sitDown';
+  clearTimeout(loopReactionTimer);
   switch (event) {
     case 'prompt': {
       const reaction = matchReaction(prompt);
@@ -74,7 +88,7 @@ function onHookEvent({ event, prompt }) {
     }
     case 'tool':
       // Also skip when a prompt reaction is about to sit down.
-      if (!busy(pet.state) && !busy(pet.next)) setPetState('sitDown');
+      if (!working()) setPetState('sitDown');
       break;
     case 'notify':
       playPetReaction('ask');
@@ -87,6 +101,38 @@ function onHookEvent({ event, prompt }) {
       break;
     case 'session-start':
       setPetState('wave');
+      break;
+  }
+}
+
+// Claude desktop app (mcp/terra-mcp.js) -> pet. The listener has checked the names
+// against pet-commands.js. A reaction while working goes back to work afterwards.
+function onPetCommand({ reaction, state }) {
+  lastEventAt = Date.now();
+  clearTimeout(loopReactionTimer);
+  if (reaction) {
+    const back = working() ? 'sitDown' : 'idle';
+    const { anim, loop } = EMOTES[reaction];
+    if (!loop) return playPetReaction(reaction, { then: back });
+    // Looping emotes would go on forever, so end them after a moment.
+    playPetReaction(reaction);
+    loopReactionTimer = setTimeout(() => {
+      if (pet.state === anim) setPetState(back);
+    }, LOOP_REACTION_MS);
+    return;
+  }
+  switch (state) {
+    case 'working':
+      if (!working()) setPetState('sitDown');
+      break;
+    case 'waiting':
+      playPetReaction('ask');
+      break;
+    case 'done':
+      playPetReaction('stars', { then: 'idle' });
+      break;
+    case 'idle':
+      backToIdle();
       break;
   }
 }
@@ -215,6 +261,33 @@ function refreshHooksStatus() {
   if (tray) updateTrayMenu();
 }
 
+const MCP_LABEL = {
+  installed: 'Claude desktop: installed',
+  'not installed': 'Claude desktop: not installed',
+  'needs update': 'Claude desktop: installed for another copy of Terra (install again)',
+  unreadable: "Claude desktop: can't read its config file",
+};
+
+// Same for the Claude desktop app's config.
+function refreshMcpStatus() {
+  const next = mcp.status();
+  if (next === mcpStatus) return;
+  mcpStatus = next;
+  if (tray) updateTrayMenu();
+}
+
+const MCP_DONE = { install: 'Terra was added to Claude desktop', uninstall: 'Terra was removed from Claude desktop' };
+
+// Runs the MCP installer from the tray and shows what it printed.
+function changeMcp(action) {
+  const { code, text } = mcp[action]();
+  refreshMcpStatus();
+  const changed = /^(Added|Removed):$/m.test(text);
+  const message = code ? "Terra couldn't change the Claude desktop config" : changed ? MCP_DONE[action] : 'Nothing to change';
+  app.focus({ steal: true }); // Terra is never the active app; bring the dialog to the front
+  dialog.showMessageBox({ type: code ? 'warning' : 'info', message, detail: text, buttons: ['OK'] });
+}
+
 function updateTrayMenu() {
   let status = 'Starting listener…';
   if (listener) status = `Listening on ${HOST}:${listener.port}`;
@@ -223,6 +296,7 @@ function updateTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: status, enabled: false },
     { label: HOOKS_LABEL[hooksStatus], enabled: false },
+    { label: MCP_LABEL[mcpStatus], enabled: false },
     { type: 'separator' },
     {
       label: 'Play animation',
@@ -255,6 +329,9 @@ function updateTrayMenu() {
       checked: app.isPackaged && app.getLoginItemSettings().openAtLogin,
       click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
     },
+    { type: 'separator' },
+    { label: 'Install in Claude desktop', enabled: mcpStatus !== 'installed', click: () => changeMcp('install') },
+    { label: 'Uninstall from Claude desktop', enabled: mcpStatus === 'installed' || mcpStatus === 'needs update', click: () => changeMcp('uninstall') },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]));
@@ -309,12 +386,14 @@ function startApp() {
       console.error('Terra could not update its hook script:', err.message);
     }
     hooksStatus = hooks.status();
+    mcpStatus = mcp.status();
     createWindow();
     createTray();
     setInterval(checkStuck, STUCK_CHECK_EVERY);
     for (const file of [hooks.defaultSettingsPath(), hooks.hookCopyPath()]) fs.watchFile(file, { interval: 2000 }, refreshHooksStatus);
+    fs.watchFile(mcp.defaultConfigPath(), { interval: 2000 }, refreshMcpStatus);
     try {
-      listener = await startListener(onHookEvent);
+      listener = await startListener(onHookEvent, onPetCommand);
     } catch (err) {
       listenerError = err.message;
       console.error('Terra listener not started:', err.message);

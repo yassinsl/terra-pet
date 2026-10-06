@@ -87,10 +87,11 @@ function emoteRuns(frames) {
   return runs;
 }
 
-async function waitFor(state, timeout = 6000) {
+// Waits until the pet is in `state`, reported after the first `since` states.
+async function waitFor(state, timeout = 6000, since = 0) {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
-    if (current() === state) return true;
+    if (t.states.length > since && current() === state) return true;
     await wait(25);
   }
   return false;
@@ -129,6 +130,31 @@ function watchRealMouse() {
 }
 
 const compress = (list) => list.map((s) => s.state).filter((s, i, a) => i === 0 || s !== a[i - 1]);
+
+// Sends something, waits for the pet to settle, and checks the states and emotes seen.
+// send() resolves to undefined or '204' when it went through, else to what went wrong.
+async function step(label, send, want, emotes, settle) {
+  const from = t.states.length;
+  await takeFrames();
+  const startRow = await js('clip && clip.row');
+  const status = await send();
+  if (settle) await waitFor(settle, 8000, from);
+  await wait(settle ? 250 : 600);
+  const seen = compress(t.states.slice(from));
+  // Emotes drawn after the pet changed state (the old one shows until the event lands).
+  const frames = await takeFrames();
+  const changed = frames.findIndex((f) => f.row !== startRow);
+  const after = want.length && changed >= 0 ? frames.slice(changed) : frames;
+  const shown = [...new Set(after.filter((f) => f.emote).map((f) => f.emote.replace(/-\d+$/, '')))];
+  const sent = status === undefined || status === '204';
+  const ok = sent && seen.join(' ') === want.join(' ') && shown.join(' ') === emotes.join(' ');
+  if (!ok) {
+    console.log('DEBUG renderer:', JSON.stringify(await js('({ state, row: clip && clip.row, step, stepTime, playsDone, plays: clip && clip.plays, hasEnd: !!onClipEnd, emote: emote && { name: emote.name, step: emote.step, stepTime: emote.stepTime }, afterEmote, sinceLastTick: performance.now() - lastTick, pending, visibility: document.visibilityState, visibilityChanges: window.__visibility, msSinceLastFrame: Math.round(performance.now() - window.__lastFrame), stalls: window.__stalls.slice(-8).map(Math.round) })')));
+    console.log('DEBUG frames in 1 s:', await js('new Promise((r) => { let n = 0; const t0 = performance.now(); const f = () => { n++; if (performance.now() - t0 < 1000) requestAnimationFrame(f); else r(n); }; requestAnimationFrame(f); })'),
+      '| window visible:', t.win.isVisible(), 'occluded-ish? focused:', t.win.isFocused(), 'bounds:', JSON.stringify(t.win.getBounds()));
+  }
+  check(label, ok, `${status ? `${/^\d{3}$/.test(status) ? `HTTP ${status}` : status}, ` : ''}${seen.join(' -> ') || '(no change)'}${shown.length ? `, emote ${shown.join(', ')}` : ''}${ok ? '' : `   want: ${want.join(' -> ') || '(no change)'}${emotes.length ? `, emote ${emotes.join(', ')}` : ''}`}`);
+}
 
 // Starts the app and runs `body` once the page has loaded (with the draw hook in place).
 function start(body, { timeout = 300000 } = {}) {
@@ -174,5 +200,5 @@ function start(body, { timeout = 300000 } = {}) {
 
 module.exports = {
   ROOT, ANIMATIONS, EMOTES, t, check, section, wait, js, current, menuItem, subItem, clipMs,
-  takeFrames, segments, emoteRuns, waitFor, compress, attempt, start, BrowserWindow, fs, path,
+  takeFrames, segments, emoteRuns, waitFor, compress, attempt, step, start, BrowserWindow, fs, path,
 };

@@ -24,6 +24,9 @@ Terra is plain JavaScript with no framework and no bundler. The README's
 - Keep Terra local and private: no network calls beyond `127.0.0.1`, and never store or
   log prompt text.
 - Never touch the real `~/.claude/settings.json` in tests; pass `--settings <temp file>`.
+  The same goes for the Claude desktop config: pass `--config <temp file>`.
+- The Claude desktop tools send Terra only names from `pet-commands.js`. Keep it that way:
+  no free text from the MCP server to the listener.
 
 ## Art
 

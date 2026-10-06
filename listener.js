@@ -1,10 +1,13 @@
-// Local HTTP listener for Claude Code hook events (see hooks/terra-hook.sh).
-// Bound to 127.0.0.1 only. One route: POST /event with { "event": string, "prompt"?: string }.
-// Prompt text is passed to onEvent and never written to disk or logged.
+// Local HTTP listener. Bound to 127.0.0.1 only. Two routes:
+//   POST /event  { "event": string, "prompt"?: string }  Claude Code hook events (hooks/terra-hook.sh)
+//   POST /mcp    { "reaction": name } or { "state": name }  the Claude desktop app (mcp/terra-mcp.js)
+// Prompt text is passed to onEvent and never written to disk or logged. /mcp takes
+// nothing but one name from the fixed lists in pet-commands.js.
 const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const { REACTIONS, STATES } = require('./pet-commands.js');
 
 const HOST = '127.0.0.1';
 const FIRST_PORT = 47800;
@@ -19,17 +22,39 @@ function reply(res, status, message) {
   res.end(message ? `${message}\n` : undefined);
 }
 
-function createHandler(onEvent) {
+// Checks a parsed /event body; returns the event for onEvent, or an error message.
+function hookEvent(body) {
+  const { event, prompt } = body;
+  if (!EVENTS.has(event)) return { error: 'unknown event' };
+  if (prompt !== undefined && typeof prompt !== 'string') return { error: 'prompt must be a string' };
+  return { value: { event, prompt } };
+}
+
+const COMMANDS = new Map([['reaction', REACTIONS], ['state', STATES]]);
+
+// Checks a parsed /mcp body: exactly one key, holding one of the known names.
+// (A Map, so keys such as "__proto__" or "toString" find nothing.)
+function petCommand(body) {
+  const keys = Object.keys(body);
+  if (keys.length !== 1 || !COMMANDS.has(keys[0])) return { error: 'expected exactly one of "reaction" or "state"' };
+  const [key] = keys;
+  if (!COMMANDS.get(key).includes(body[key])) return { error: `unknown ${key}` };
+  return { value: { [key]: body[key] } };
+}
+
+function createHandler(onEvent, onPetCommand) {
+  const routes = { '/event': [hookEvent, onEvent], '/mcp': [petCommand, onPetCommand] };
   return (req, res) => {
     const { port } = req.socket.address();
     const { pathname } = new URL(req.url, `http://${HOST}`);
-    if (pathname !== '/event') return reply(res, 404, 'not found');
+    if (!Object.hasOwn(routes, pathname)) return reply(res, 404, 'not found');
+    const [validate, handle] = routes[pathname];
     if (req.method !== 'POST') {
       res.setHeader('Allow', 'POST');
       return reply(res, 405, 'use POST');
     }
-    // Browsers always send Origin on a POST; the hook (curl) never does. Checking Host
-    // as well stops web pages from reaching the pet through DNS rebinding.
+    // Browsers always send Origin on a POST; the hook (curl) and the MCP server never do.
+    // Checking Host as well stops web pages from reaching the pet through DNS rebinding.
     const { host, origin } = req.headers;
     if (origin !== undefined || (host !== `${HOST}:${port}` && host !== `localhost:${port}`)) {
       return reply(res, 403, 'forbidden');
@@ -55,10 +80,9 @@ function createHandler(onEvent) {
         return reply(res, 400, 'body is not valid JSON');
       }
       if (!body || typeof body !== 'object' || Array.isArray(body)) return reply(res, 400, 'expected a JSON object');
-      const { event, prompt } = body;
-      if (!EVENTS.has(event)) return reply(res, 400, 'unknown event');
-      if (prompt !== undefined && typeof prompt !== 'string') return reply(res, 400, 'prompt must be a string');
-      onEvent({ event, prompt });
+      const { value, error } = validate(body);
+      if (error) return reply(res, 400, error);
+      handle(value);
       reply(res, 204);
     });
   };
@@ -75,9 +99,9 @@ function listen(server, port) {
 }
 
 // Starts on the first free port from 47800 and writes it to ~/.terra-pet/port.
-async function startListener(onEvent) {
+async function startListener(onEvent, onPetCommand = () => {}) {
   for (let port = FIRST_PORT; port < FIRST_PORT + PORT_TRIES; port++) {
-    const server = http.createServer(createHandler(onEvent));
+    const server = http.createServer(createHandler(onEvent, onPetCommand));
     server.requestTimeout = 5000;
     server.headersTimeout = 5000;
     try {

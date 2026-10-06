@@ -9,6 +9,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { InstallError, readJson, writeJson, describeFile, sameJson: same } = require('./json-file.js');
 
 const MARKER = 'terra-hook.sh'; // any hook handler whose command mentions this is Terra's
 // Inside the packaged app this path is inside app.asar, which Electron reads like a folder.
@@ -46,81 +47,16 @@ function isTerraHandler(handler) {
 }
 
 const terraGroups = (groups) => (Array.isArray(groups) ? groups : []).filter((g) => Array.isArray(g?.hooks) && g.hooks.some(isTerraHandler));
-const sorted = (v) => (Array.isArray(v) ? v.map(sorted)
-  : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted(v[k])])) : v);
-const same = (a, b) => JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
 const show = (hookEvent, group) => `  ${hookEvent}: ${JSON.stringify(group)}`;
-
-class InstallError extends Error {}
 
 // Reads settings.json, following a symlink to the real file. Throws InstallError.
 function readSettings(file) {
-  let real = file;
-  let isLink = false;
-  try {
-    isLink = fs.lstatSync(file).isSymbolicLink();
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
+  const target = readJson(file);
+  const { hooks } = target.data;
+  if (hooks !== undefined && (typeof hooks !== 'object' || Array.isArray(hooks))) {
+    throw new InstallError(`"hooks" in ${target.real} is not an object`);
   }
-  if (isLink) {
-    try {
-      real = fs.realpathSync(file);
-    } catch {
-      throw new InstallError(`${file} is a symlink to ${fs.readlinkSync(file)}, which doesn't exist`);
-    }
-  }
-  let raw = null;
-  try {
-    raw = fs.readFileSync(real, 'utf8');
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
-  }
-  let settings = {};
-  if (raw !== null && raw.trim() !== '') {
-    try {
-      settings = JSON.parse(raw);
-    } catch (err) {
-      throw new InstallError(`${real} is not valid JSON (${err.message})`);
-    }
-  }
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new InstallError(`${real} is not a JSON object`);
-  if (settings.hooks !== undefined && (typeof settings.hooks !== 'object' || Array.isArray(settings.hooks))) {
-    throw new InstallError(`"hooks" in ${real} is not an object`);
-  }
-  return { file, real, isLink, raw, settings };
-}
-
-function timestamp() {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-}
-
-// Backs up the current file next to settings.json (next to the link, if it is one),
-// then writes the new content into the real file in place, so a symlink stays a symlink.
-function writeSettings({ file, real, raw, settings }) {
-  let backup = null;
-  if (raw !== null) {
-    const { mode } = fs.statSync(real);
-    for (let n = 0; ; n++) {
-      backup = `${file}.terra-backup-${timestamp()}${n ? `-${n}` : ''}`;
-      try {
-        fs.writeFileSync(backup, raw, { flag: 'wx', mode });
-        break;
-      } catch (err) {
-        if (err.code !== 'EEXIST') throw err;
-      }
-    }
-  } else {
-    fs.mkdirSync(path.dirname(real), { recursive: true });
-  }
-  const indent = (raw && raw.match(/^([ \t]+)"/m)?.[1]) || '  ';
-  fs.writeFileSync(real, `${JSON.stringify(settings, null, indent)}\n`, raw === null ? { mode: 0o600 } : undefined);
-  return backup;
-}
-
-function describeTarget({ file, real, isLink, raw }) {
-  return `Settings: ${file}${isLink ? ` (symlink to ${real})` : ''}${raw === null ? ' (new file)' : ''}`;
+  return target;
 }
 
 // Copies the hook script to ~/.terra-pet/terra-hook.sh (atomically, so a hook that is
@@ -159,7 +95,7 @@ function install(settingsFile = defaultSettingsPath()) {
     if (err instanceof InstallError) return { code: 1, text: `Error: ${err.message}\nNothing was changed.` };
     throw err;
   }
-  const hooks = target.settings.hooks || {};
+  const hooks = target.data.hooks || {};
   const added = [];
   const removed = [];
   for (const entry of ENTRIES) {
@@ -186,14 +122,14 @@ function install(settingsFile = defaultSettingsPath()) {
   }
 
   const copied = copyHookScript();
-  lines.push(describeTarget(target));
+  lines.push(describeFile('Settings', target));
   lines.push(`Hook script: ${hookCopyPath()} (${{ copied: 'copied', updated: 'updated', unchanged: 'already up to date' }[copied]})`);
   if (!added.length) {
     lines.push("Terra's hooks are already installed. settings.json not changed, no backup needed.");
     return { code: 0, text: lines.join('\n') };
   }
-  target.settings.hooks = hooks;
-  const backup = writeSettings(target);
+  target.data.hooks = hooks;
+  const backup = writeJson(target);
   if (backup) lines.push(`Backup:   ${backup}`);
   if (removed.length) lines.push(`Removed (old Terra entries):\n${removed.join('\n')}`);
   lines.push(`Added:\n${added.join('\n')}`);
@@ -211,7 +147,7 @@ function uninstall(settingsFile = defaultSettingsPath()) {
     if (err instanceof InstallError) return { code: 1, text: `Error: ${err.message}\nNothing was changed.` };
     throw err;
   }
-  const hooks = target.settings.hooks || {};
+  const hooks = target.data.hooks || {};
   const removed = [];
   for (const [hookEvent, groups] of Object.entries(hooks)) {
     if (!Array.isArray(groups)) continue;
@@ -232,7 +168,7 @@ function uninstall(settingsFile = defaultSettingsPath()) {
     else delete hooks[hookEvent];
   }
 
-  lines.push(describeTarget(target));
+  lines.push(describeFile('Settings', target));
   const copy = hookCopyPath();
   if (fs.existsSync(copy)) {
     fs.rmSync(copy);
@@ -242,9 +178,9 @@ function uninstall(settingsFile = defaultSettingsPath()) {
     lines.push('No Terra hooks found in settings.json. Not changed, no backup needed.');
     return { code: 0, text: lines.join('\n') };
   }
-  if (Object.keys(hooks).length) target.settings.hooks = hooks;
-  else delete target.settings.hooks;
-  const backup = writeSettings(target);
+  if (Object.keys(hooks).length) target.data.hooks = hooks;
+  else delete target.data.hooks;
+  const backup = writeJson(target);
   if (backup) lines.push(`Backup:   ${backup}`);
   lines.push(`Removed:\n${removed.join('\n')}`);
   lines.push('Nothing else in the file was changed.');

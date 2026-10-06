@@ -15,7 +15,7 @@ global.setInterval = (fn, ms, ...args) => {
 };
 
 const {
-  ROOT, t, check, section, wait, js, current, menuItem, subItem, takeFrames, waitFor, compress, attempt, start, fs, path,
+  ROOT, t, check, section, wait, js, current, menuItem, subItem, waitFor, compress, attempt, step, start, fs, path,
 } = require('./lib.js');
 const { PROMPT_MARK } = require('../lib.js');
 const { spawn } = require('node:child_process');
@@ -39,30 +39,6 @@ const post = (body) => run('curl', ['-q', '-s', '-o', '/dev/null', '-w', '%{http
 const hook = (arg, input) => run('/bin/sh', arg ? [path.join(ROOT, 'hooks', 'terra-hook.sh'), arg] : [path.join(ROOT, 'hooks', 'terra-hook.sh')], JSON.stringify(input))
   .then((r) => (r.code === 0 && r.out === '' ? undefined : `hook exit ${r.code}, output ${r.out.length} bytes`));
 const promptEvent = (text) => ({ event: 'prompt', prompt: `${text} ${PROMPT_MARK}` });
-
-// Sends something, waits for the pet to settle, and checks the states and emotes seen.
-async function step(label, send, want, emotes, settle) {
-  const from = t.states.length;
-  await takeFrames();
-  const startRow = await js('clip && clip.row');
-  const status = await send();
-  if (settle) await waitFor(settle, 8000);
-  await wait(settle ? 250 : 600);
-  const seen = compress(t.states.slice(from));
-  // Emotes drawn after the pet changed state (the old one shows until the event lands).
-  const frames = await takeFrames();
-  const changed = frames.findIndex((f) => f.row !== startRow);
-  const after = want.length && changed >= 0 ? frames.slice(changed) : frames;
-  const shown = [...new Set(after.filter((f) => f.emote).map((f) => f.emote.replace(/-\d+$/, '')))];
-  const httpOk = status === undefined || status === '204';
-  const ok = httpOk && seen.join(' ') === want.join(' ') && shown.join(' ') === emotes.join(' ');
-  if (!ok) {
-    console.log('DEBUG renderer:', JSON.stringify(await js('({ state, row: clip && clip.row, step, stepTime, playsDone, plays: clip && clip.plays, hasEnd: !!onClipEnd, emote: emote && { name: emote.name, step: emote.step, stepTime: emote.stepTime }, afterEmote, sinceLastTick: performance.now() - lastTick, pending, visibility: document.visibilityState, visibilityChanges: window.__visibility, msSinceLastFrame: Math.round(performance.now() - window.__lastFrame), stalls: window.__stalls.slice(-8).map(Math.round) })')));
-    console.log('DEBUG frames in 1 s:', await js('new Promise((r) => { let n = 0; const t0 = performance.now(); const f = () => { n++; if (performance.now() - t0 < 1000) requestAnimationFrame(f); else r(n); }; requestAnimationFrame(f); })'),
-      '| window visible:', t.win.isVisible(), 'occluded-ish? focused:', t.win.isFocused(), 'bounds:', JSON.stringify(t.win.getBounds()));
-  }
-  check(label, ok, `${status ? `HTTP ${status}, ` : ''}${seen.join(' -> ') || '(no change)'}${shown.length ? `, emote ${shown.join(', ')}` : ''}${ok ? '' : `   want: ${want.join(' -> ') || '(no change)'}${emotes.length ? `, emote ${emotes.join(', ')}` : ''}`}`);
-}
 
 async function pausedIn(state) {
   await js('sleepClock -= 6 * 60 * 1000; nextPatrolAt = 0; nextBlinkAt = 0;');

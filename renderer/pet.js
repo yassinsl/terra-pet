@@ -2,11 +2,17 @@
 
 const CELL_W = 48;
 const CELL_H = 52;
-// The canvas is the 64x80 emote canvas at `scale` (2x, 3x or 4x; the main process
-// passes it in the page URL and when it changes), with the pet's cell at (8,28) on it.
+// The canvas is the 64x80 emote canvas at `scale` (1x to 4x; the main process passes
+// it in the page URL and when it changes), with the pet's cell at (8,28) on it.
+// PET_X and PET_Y are in CSS pixels, which are the window's points.
 let scale = Number(new URLSearchParams(location.search).get('scale')) || 4;
 let PET_X = 8 * scale;
 let PET_Y = 28 * scale;
+// Device pixels per art pixel: the size times the screen's pixel ratio (2 on Retina).
+// The canvas has one pixel per device pixel, so on Retina an art pixel is a whole number
+// of device pixels at every size (2 at 1x, 3 at 1.5x) instead of the screen stretching
+// a smaller canvas. Where the ratio is 1, 1.5x can't be whole and some pixels come out wider.
+let px = scale;
 
 const BLINK_EVERY = [2500, 5000];    // ms between idle blinks
 const SLEEP_AFTER = 5 * 60 * 1000;   // idle this long with no state change -> sleep
@@ -21,12 +27,24 @@ const ctx = canvas.getContext('2d');
 
 function applyScale(next) {
   scale = next;
+  px = scale * devicePixelRatio;
   PET_X = 8 * scale;
   PET_Y = 28 * scale;
-  canvas.width = 64 * scale; // resizing resets the context, so set smoothing again
-  canvas.height = 80 * scale;
+  canvas.style.width = `${64 * scale}px`;
+  canvas.style.height = `${80 * scale}px`;
+  canvas.width = Math.round(64 * px); // resizing resets the context, so set smoothing again
+  canvas.height = Math.round(80 * px);
   ctx.imageSmoothingEnabled = false;
   drawn = ''; // force a redraw
+}
+
+// Moving to a screen with another pixel ratio (from a Retina laptop to a plain monitor,
+// say) changes devicePixelRatio, so the canvas is rebuilt for the new one.
+function watchPixelRatio() {
+  matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change', () => {
+    applyScale(scale);
+    watchPixelRatio();
+  }, { once: true });
 }
 
 const sheet = new Image();
@@ -144,7 +162,7 @@ function draw() {
   ctx.drawImage(
     sheet,
     frame * CELL_W, clip.row * CELL_H, CELL_W, CELL_H,
-    PET_X, PET_Y, CELL_W * scale, CELL_H * scale,
+    8 * px, 28 * px, CELL_W * px, CELL_H * px,
   );
   if (showEmote) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 }
@@ -382,4 +400,5 @@ function tick() {
 }
 
 applyScale(scale);
+watchPixelRatio();
 requestAnimationFrame(tick);
