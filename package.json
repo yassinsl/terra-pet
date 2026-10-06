@@ -1,0 +1,13 @@
+{
+  "name": "terra-pet",
+  "version": "0.1.0",
+  "description": "Terra, a pixel-art desktop pet for macOS.",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^44.5.1"
+  }
+}
