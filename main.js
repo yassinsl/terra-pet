@@ -8,6 +8,7 @@ const mcp = require('./mcp-installer.js');
 const windowState = require('./window-state.js');
 const visibility = require('./visibility.js');
 const claude = require('./claude-app.js'); // used as claude.isRunning() so tests can fake it
+const openWithClaude = require('./open-with-claude.js');
 const { HOST, startListener, removePortFile } = require('./listener.js');
 const { matchReaction } = require('./reactions.js');
 
@@ -41,6 +42,11 @@ let petShown = false;
 let hidePending = false;  // waiting for the current animation to finish before hiding
 let hideTimer = null;
 let polling = false;
+// Opened by Terra's MCP server because Claude desktop started (mcp/pet-launcher.js); such a
+// pet quits again shortly after Claude does. A pet you opened, or one from login, never does.
+const openedByClaude = process.argv.includes('--opened-by-claude');
+const mcpSessions = new Set(); // MCP servers (one per running Claude desktop) that said hello
+let claudeQuitTimer = null;
 
 // The packaged app has no npm scripts, so it takes these instead:
 //   Terra --install-hooks | --uninstall-hooks [--settings <path>]
@@ -119,6 +125,33 @@ function onHookEvent({ event, prompt }) {
 
 // Claude desktop app (mcp/terra-mcp.js) -> pet. The listener has checked the names
 // against pet-commands.js. A reaction while working goes back to work afterwards.
+// The MCP server saying it's here (hello), going (bye), or asking if the pet is up (ping).
+function onServer({ action, id }) {
+  if (action === 'hello') {
+    mcpSessions.add(id);
+    cancelClaudeQuit();
+  } else if (action === 'bye') {
+    mcpSessions.delete(id);
+    quitAfterClaude();
+  }
+  return { pid: process.pid, openedByClaude, sessions: mcpSessions.size, quitting: claudeQuitTimer !== null };
+}
+
+// When the last MCP server has gone (Claude desktop quit), a pet that Claude opened quits
+// too, after a few seconds; a server saying hello in the meantime cancels it.
+function quitAfterClaude() {
+  if (!openedByClaude || mcpSessions.size || claudeQuitTimer || !openWithClaude.isEnabled()) return;
+  console.log(`Terra: Claude desktop has gone; quitting in ${openWithClaude.QUIT_AFTER_MS / 1000} s`);
+  claudeQuitTimer = setTimeout(() => app.quit(), openWithClaude.QUIT_AFTER_MS);
+}
+
+function cancelClaudeQuit() {
+  if (!claudeQuitTimer) return;
+  clearTimeout(claudeQuitTimer);
+  claudeQuitTimer = null;
+  console.log('Terra: Claude desktop is back; staying');
+}
+
 function onPetCommand({ reaction, state }) {
   lastEventAt = Date.now();
   clearTimeout(loopReactionTimer);
@@ -332,7 +365,8 @@ function createWindow() {
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setIgnoreMouseEvents(true, { forward: true });
 
-  win.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: { scale: String(scale) } });
+  // A pet that Claude desktop just opened says hi instead of its usual start-up wave.
+  win.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: { scale: String(scale), ...(openedByClaude ? { greet: 'hi' } : {}) } });
   win.once('ready-to-show', () => {
     if (!wantShown()) return; // stays hidden until Claude opens (or whatever Show Terra says)
     petShown = true;
@@ -444,6 +478,15 @@ function updateTrayMenu() {
       checked: app.isPackaged && app.getLoginItemSettings().openAtLogin,
       click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
     },
+    {
+      label: 'Open and close with Claude desktop',
+      type: 'checkbox',
+      checked: openWithClaude.isEnabled(),
+      click: (item) => {
+        openWithClaude.setEnabled(item.checked);
+        if (!item.checked) cancelClaudeQuit();
+      },
+    },
     { type: 'separator' },
     { label: 'Install in Claude desktop', enabled: mcpStatus !== 'installed', click: () => changeMcp('install') },
     { label: 'Uninstall from Claude desktop', enabled: mcpStatus === 'installed' || mcpStatus === 'needs update', click: () => changeMcp('uninstall') },
@@ -455,6 +498,14 @@ function updateTrayMenu() {
 // ---- Start ----
 
 function startApp() {
+  // A separate data folder, for running a second copy while developing or testing.
+  if (process.env.TERRA_USER_DATA) app.setPath('userData', process.env.TERRA_USER_DATA);
+  // Never two pets: a second one (opened by Claude while you were opening Terra, say) leaves.
+  if (!app.requestSingleInstanceLock()) {
+    app.exit(0);
+    return;
+  }
+
   ipcMain.on('pet:ready-to-hide', (event) => {
     if (win && event.sender === win.webContents) hideNow();
   });
@@ -513,10 +564,12 @@ function startApp() {
     createTray();
     setInterval(checkStuck, STUCK_CHECK_EVERY);
     setInterval(checkClaude, claude.POLL_MS); // also notices a Claude Code session running out
+    // Opened by a server that went away before it could say hello: don't linger forever.
+    if (openedByClaude) setTimeout(quitAfterClaude, 30000);
     for (const file of [hooks.defaultSettingsPath(), hooks.hookCopyPath()]) fs.watchFile(file, { interval: 2000 }, refreshHooksStatus);
     fs.watchFile(mcp.defaultConfigPath(), { interval: 2000 }, refreshMcpStatus);
     try {
-      listener = await startListener(onHookEvent, onPetCommand);
+      listener = await startListener(onHookEvent, onPetCommand, onServer);
     } catch (err) {
       listenerError = err.message;
       console.error('Terra listener not started:', err.message);

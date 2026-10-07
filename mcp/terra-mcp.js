@@ -6,6 +6,10 @@
 // Claude desktop runs it with Terra's own binary in Node mode (see mcp-installer.js):
 //   ELECTRON_RUN_AS_NODE=1 <Terra or Electron binary> <this file>
 // stdout carries the protocol, so nothing else may be written there; logs go to stderr.
+//
+// It also opens the pet when Claude desktop starts and the pet isn't running, and tells
+// the pet when it goes, so a pet it opened can close with Claude (see pet-launcher.js).
+const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
@@ -15,6 +19,8 @@ const { serveStdio } = require('@modelcontextprotocol/server/stdio');
 const { z } = require('zod');
 const { REACTIONS, STATES } = require('../pet-commands.js');
 const { version } = require('../package.json');
+const launcher = require('./pet-launcher.js');
+const openWithClaude = require('../open-with-claude.js');
 
 const HOST = '127.0.0.1';
 const TIMEOUT = 2000;
@@ -118,3 +124,37 @@ function createServer() {
 
 serveStdio(createServer, { onerror: (err) => console.error('Terra MCP server error:', err.message) });
 console.error(`Terra MCP server ${version} running on stdio`);
+
+// ---- Opening the pet with Claude, and letting it know when Claude goes ----
+
+const session = randomUUID();
+let saidHello = false;
+let closing = false;
+
+async function hello() {
+  const { state } = await launcher.tellPet('hello', session);
+  saidHello = saidHello || state === 'up';
+}
+
+async function arrive() {
+  await hello();
+  if (saidHello || closing) return;
+  const outcome = await launcher.ensurePet({ isEnabled: openWithClaude.isEnabled, stopped: () => closing });
+  console.error(`Terra MCP server: pet ${outcome}`);
+  if (!closing) await hello();
+}
+
+// Claude desktop closes stdin (or sends a signal) when it quits or restarts the server.
+// Only a server that said hello says goodbye, so the short-lived first of Claude's two
+// starts leaves no trace.
+async function leave() {
+  if (closing) return;
+  closing = true;
+  if (saidHello) await launcher.tellPet('bye', session, 500);
+  process.exit(0);
+}
+
+process.stdin.on('end', leave);
+process.stdin.on('close', leave);
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, leave);
+arrive().catch((err) => console.error('Terra MCP server: could not open the pet:', err.message));

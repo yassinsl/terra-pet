@@ -41,6 +41,12 @@ desktop app is open: it waves hi when Claude opens and tucks itself away when Cl
   Claude desktop, so it is up to date when it comes back.
 - The app turns **Start at login** on the first time it runs, so Terra starts quietly at
   login and appears when Claude opens. Turn it off in the menu and it stays off.
+- **Open and close with Claude desktop** (on by default). Once Terra's tools are installed
+  in Claude desktop, Claude starts Terra's MCP server every time it opens. If Terra isn't
+  running then, the server opens it (the Terra.app it belongs to, or `npm start`'s Electron
+  when you run from source), and Terra says hi. When you quit Claude, a Terra opened this
+  way quits 5 seconds later, unless Claude comes back first. A Terra you opened yourself,
+  or one that started at login, stays. Untick the item in the menu to stop both.
 - Terra starts at **Match small (2.25x)**, about 100 points tall, the size of the Codex
   pet. A size you pick from the menu is remembered. At 2.25x on a Retina screen an art
   pixel is 4.5 screen pixels, so Terra draws each one 4 or 5 pixels wide in a fixed

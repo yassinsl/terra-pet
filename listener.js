@@ -1,6 +1,8 @@
-// Local HTTP listener. Bound to 127.0.0.1 only. Two routes:
+// Local HTTP listener. Bound to 127.0.0.1 only. Three routes:
 //   POST /event  { "event": string, "prompt"?: string }  Claude Code hook events (hooks/terra-hook.sh)
 //   POST /mcp    { "reaction": name } or { "state": name }  the Claude desktop app (mcp/terra-mcp.js)
+//   POST /server { "action": "hello"|"bye"|"ping", "id": string }  that MCP server coming and
+//                going (answered with a small JSON status instead of 204)
 // Prompt text is passed to onEvent and never written to disk or logged. /mcp takes
 // nothing but one name from the fixed lists in pet-commands.js.
 const fs = require('node:fs');
@@ -8,6 +10,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { REACTIONS, STATES } = require('./pet-commands.js');
+const { SESSION_ID } = require('./open-with-claude.js');
 
 const HOST = '127.0.0.1';
 const FIRST_PORT = 47800;
@@ -42,8 +45,19 @@ function petCommand(body) {
   return { value: { [key]: body[key] } };
 }
 
-function createHandler(onEvent, onPetCommand) {
-  const routes = { '/event': [hookEvent, onEvent], '/mcp': [petCommand, onPetCommand] };
+const SERVER_ACTIONS = ['hello', 'bye', 'ping'];
+
+// Checks a parsed /server body: an action and the server's session id, nothing else.
+function serverMessage(body) {
+  const { action, id } = body;
+  if (Object.keys(body).length !== 2 || !SERVER_ACTIONS.includes(action) || typeof id !== 'string' || !SESSION_ID.test(id)) {
+    return { error: 'expected { "action": "hello" | "bye" | "ping", "id": <session id> }' };
+  }
+  return { value: { action, id } };
+}
+
+function createHandler(onEvent, onPetCommand, onServer) {
+  const routes = { '/event': [hookEvent, onEvent], '/mcp': [petCommand, onPetCommand], '/server': [serverMessage, onServer] };
   return (req, res) => {
     const { port } = req.socket.address();
     const { pathname } = new URL(req.url, `http://${HOST}`);
@@ -82,7 +96,12 @@ function createHandler(onEvent, onPetCommand) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) return reply(res, 400, 'expected a JSON object');
       const { value, error } = validate(body);
       if (error) return reply(res, 400, error);
-      handle(value);
+      const answer = handle(value);
+      if (answer && typeof answer === 'object') {
+        res.writeHead(200, { 'Content-Type': 'application/json', Connection: 'close' });
+        res.end(JSON.stringify(answer));
+        return;
+      }
       reply(res, 204);
     });
   };
@@ -99,9 +118,9 @@ function listen(server, port) {
 }
 
 // Starts on the first free port from 47800 and writes it to ~/.terra-pet/port.
-async function startListener(onEvent, onPetCommand = () => {}) {
+async function startListener(onEvent, onPetCommand = () => {}, onServer = () => ({})) {
   for (let port = FIRST_PORT; port < FIRST_PORT + PORT_TRIES; port++) {
-    const server = http.createServer(createHandler(onEvent, onPetCommand));
+    const server = http.createServer(createHandler(onEvent, onPetCommand, onServer));
     server.requestTimeout = 5000;
     server.headersTimeout = 5000;
     try {

@@ -44,7 +44,8 @@ function applyScale(next) {
 const sheet = new Image();
 sheet.src = '../Bot/spritesheet-x1.png';
 sheet.onerror = () => console.error('Could not load sprite sheet:', sheet.src);
-sheet.onload = () => setState('wave');
+// Starts with a wave, or with the hi reaction when Claude desktop has just opened Terra.
+sheet.onload = () => (new URLSearchParams(location.search).get('greet') === 'hi' ? playReaction('hi') : setState('wave'));
 
 const emoteImages = Object.fromEntries(Object.entries(EMOTES).map(([name, def]) => [
   name,

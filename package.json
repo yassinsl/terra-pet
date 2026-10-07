@@ -38,6 +38,8 @@
       "json-file.js",
       "pet-commands.js",
       "mcp/terra-mcp.js",
+      "mcp/pet-launcher.js",
+      "open-with-claude.js",
       "window-state.js",
       "visibility.js",
       "claude-app.js",
