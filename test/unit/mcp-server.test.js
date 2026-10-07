@@ -5,6 +5,9 @@
 const { ROOT, check, section, summary, isolateHome } = require('../lib.js');
 
 const home = isolateHome('mcp-server');
+// These tests are about the tools; opening the pet when it isn't running is
+// test/e2e/open-with-claude.test.js's, so the server doesn't do it here.
+require(require('node:path').join(ROOT, 'open-with-claude.js')).setEnabled(false);
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');

@@ -20,12 +20,15 @@ const SUITES = [
   ['unit', process.execPath, 'test/unit/mcp-server.test.js'],
   ['unit', process.execPath, 'test/unit/window-state.test.js'],
   ['unit', process.execPath, 'test/unit/visibility.test.js'],
+  ['unit', process.execPath, 'test/unit/pet-launcher.test.js'],
   ['e2e', process.execPath, 'test/e2e/startup.test.js'],
   ['e2e', ELECTRON, 'test/e2e/events.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/pet.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/size.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/visibility.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/mcp.e2e.js'],
+  ['e2e', ELECTRON, 'test/e2e/claude-lifecycle.e2e.js'],
+  ['e2e', process.execPath, 'test/e2e/open-with-claude.test.js'],
 ];
 
 const only = process.argv[2];
@@ -61,7 +64,7 @@ function runSuite(cmd, file) {
   console.log('\n===== prompt privacy');
   const leaks = [];
   if (output.includes(PROMPT_MARK)) leaks.push('test output / app logs');
-  const dirs = fs.readdirSync(os.tmpdir()).filter((n) => /^terra-(e2e|hook|listener|mcp)/.test(n)).map((n) => path.join(os.tmpdir(), n));
+  const dirs = fs.readdirSync(os.tmpdir()).filter((n) => /^terra-(e2e|hook|listener|mcp|launcher)/.test(n)).map((n) => path.join(os.tmpdir(), n));
   dirs.push(path.join(os.homedir(), 'Library', 'Application Support', 'Electron'));
   const scan = (p) => {
     let st;

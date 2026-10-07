@@ -189,7 +189,7 @@ start(async () => {
 
   section('tray');
   const labels = t.trayMenu.items.map((i) => i.label || '---');
-  check('menu items', /^Listening on 127\.0\.0\.1:\d+ \| Hooks: not installed \| Claude desktop: not installed \| --- \| Play animation \| Play reaction \| Back to idle \| --- \| Size \| Show Terra \| Patrol \| Start at login \(packaged app only\) \| --- \| Install in Claude desktop \| Uninstall from Claude desktop \| --- \| Quit$/.test(labels.join(' | ')), labels.join(' | '));
+  check('menu items', /^Listening on 127\.0\.0\.1:\d+ \| Hooks: not installed \| Claude desktop: not installed \| --- \| Play animation \| Play reaction \| Back to idle \| --- \| Size \| Show Terra \| Patrol \| Start at login \(packaged app only\) \| Open and close with Claude desktop \| --- \| Install in Claude desktop \| Uninstall from Claude desktop \| --- \| Quit$/.test(labels.join(' | ')), labels.join(' | '));
   const login = menuItem('Start at login (packaged app only)');
   check('Start at login: off and greyed out with npm start', login && !login.enabled && !login.checked, 'a login item must be an app; with npm start it would be Electron itself');
   {
