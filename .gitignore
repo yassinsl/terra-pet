@@ -12,3 +12,18 @@ dist/
 # macOS and editor clutter
 .DS_Store
 *.log
+
+# Saved test output
+test-output*.txt
+
+# Extras from the art pack that Terra never loads (it reads only Bot/spritesheet-x1.png
+# and Bot/reactions/emotes-only/; Bot/all-animations.gif is the README's picture)
+Bot/*.zip
+Bot/frames/
+Bot/gifs/
+Bot/spritesheet-x4.png
+Bot/all-frames-poster.png
+Bot/terra-bot-*.png
+Bot/reactions/frames/
+Bot/reactions/*.gif
+Bot/reactions/overview.png
