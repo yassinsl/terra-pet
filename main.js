@@ -18,8 +18,6 @@ const { MARGIN, SCALES, geometry } = windowState;
 const STUCK_STATES = new Set(['work', 'sitDown', 'wait', 'think', 'ask']);
 const STUCK_AFTER = 10 * 60 * 1000;
 const STUCK_CHECK_EVERY = 15 * 1000;
-// How long a looping reaction (talk, sad, ask) asked for by Claude desktop plays.
-const LOOP_REACTION_MS = 4000;
 
 let win = null;
 let tray = null; // kept at module level so it isn't garbage-collected
@@ -30,7 +28,6 @@ let listener = null;      // { server, port } once listening
 let listenerError = null;
 let hooksStatus = 'not installed';
 let mcpStatus = 'not installed';
-let loopReactionTimer = null;
 let pet = { state: null, next: null, since: Date.now() }; // as last reported by the renderer
 let lastEventAt = Date.now();
 let mouseOnPet = false;
@@ -96,7 +93,6 @@ function onHookEvent({ event, prompt }) {
   lastEventAt = Date.now();
   lastCodeEventAt = lastEventAt;
   applyVisibility(); // a Claude Code session may be what shows Terra
-  clearTimeout(loopReactionTimer);
   switch (event) {
     case 'prompt': {
       const reaction = matchReaction(prompt);
@@ -123,8 +119,6 @@ function onHookEvent({ event, prompt }) {
   }
 }
 
-// Claude desktop app (mcp/terra-mcp.js) -> pet. The listener has checked the names
-// against pet-commands.js. A reaction while working goes back to work afterwards.
 // The MCP server saying it's here (hello), going (bye), or asking if the pet is up (ping).
 function onServer({ action, id }) {
   if (action === 'hello') {
@@ -152,34 +146,12 @@ function cancelClaudeQuit() {
   console.log('Terra: Claude desktop is back; staying');
 }
 
+// Claude desktop app (mcp/terra-mcp.js) -> pet. The listener has checked the names
+// against pet-commands.js. Claude sends these in quick bursts, so the renderer queues
+// them and plays them in order (see "Claude desktop's queue" in renderer/pet.js).
 function onPetCommand({ reaction, state }) {
   lastEventAt = Date.now();
-  clearTimeout(loopReactionTimer);
-  if (reaction) {
-    const back = working() ? 'sitDown' : 'idle';
-    const { anim, loop } = EMOTES[reaction];
-    if (!loop) return playPetReaction(reaction, { then: back });
-    // Looping emotes would go on forever, so end them after a moment.
-    playPetReaction(reaction);
-    loopReactionTimer = setTimeout(() => {
-      if (pet.state === anim) setPetState(back);
-    }, LOOP_REACTION_MS);
-    return;
-  }
-  switch (state) {
-    case 'working':
-      if (!working()) setPetState('sitDown');
-      break;
-    case 'waiting':
-      playPetReaction('ask');
-      break;
-    case 'done':
-      playPetReaction('stars', { then: 'idle' });
-      break;
-    case 'idle':
-      backToIdle();
-      break;
-  }
+  sendToPet('pet:command', reaction ? { reaction } : { state });
 }
 
 // Stop and StopFailure don't fire when you interrupt Claude, so don't trust

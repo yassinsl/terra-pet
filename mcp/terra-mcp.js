@@ -42,11 +42,11 @@ Use it when a moment clearly has a feeling, at most once or twice per reply:
 - angry: playful frustration, when the user is clearly fed up with a bug
 - talk: you are about to give a long explanation
 - ask: you are asking the user a quick question
-After the reaction Terra goes back to what it was doing (still working, if it was).`;
+Calls made close together don't cut each other off: Terra plays them one after another, each reaction to its end. After the reaction Terra goes back to what it was doing (still working, if it was).`;
 
 const STATE_DESCRIPTION = `Set what Terra, the user's desktop pet, is doing, so the user can glance at it to see your status.
 - working: call it before a long answer or a multi-step task (research, writing code, several tool calls). Terra sits at its computer until you set another state.
-- done: call it when you have finished that work. Terra celebrates, then idles.
+- done: call it when you have finished that work. Terra celebrates, then idles; after a sad or angry reaction in the same reply it just stands up and idles.
 - waiting: call it when you stop to wait for the user's answer, decision or approval. Terra keeps asking until you set another state.
 - idle: puts Terra back to rest, for example when you stop without finishing.
 For example: terra_state("working") before a long answer and terra_state("done") after it. Skip it for short, quick replies. Terra gives up on working or waiting by itself after 10 minutes.`;
@@ -54,7 +54,7 @@ For example: terra_state("working") before a long answer and terra_state("done")
 const STATE_DONE = {
   working: 'Terra is working at its computer. Call terra_state("done") when you finish.',
   waiting: 'Terra is waiting for the user.',
-  done: 'Terra is celebrating, then goes back to idle.',
+  done: 'Terra finishes what it is showing, then celebrates and idles (after a sad or angry reaction it just idles).',
   idle: 'Terra is back to idle.',
 };
 

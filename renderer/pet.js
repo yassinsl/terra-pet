@@ -155,12 +155,13 @@ function advanceEmote(dt) {
       emote.step++;
     } else if (emote.loop) {
       emote.step = 0;
+      if (playing && playing.name === emote.name) playing.cycleEnded = true;
     } else {
       emote = null;
       if (afterEmote) {
         const next = afterEmote;
         afterEmote = null;
-        setState(next);
+        continueTo(next);
       }
     }
   }
@@ -301,7 +302,17 @@ function enter(name, then = null, emoteName = null) {
 // the last frame) until the emote ends.
 function finishState(next) {
   if (emote && !emote.loop) afterEmote = next;
-  else setState(next);
+  else continueTo(next);
+}
+
+// An animation (and its one-shot emote) has ended and hands over to `next`. When it was
+// the queue's reaction, the queue decides what comes next instead (see runQueue).
+function continueTo(next) {
+  if (playing && !playing.loop && state === playing.anim) {
+    playing.ended = true;
+    return;
+  }
+  setState(next);
 }
 
 // Plays an emote above the pet together with its matching pet animation.
@@ -313,6 +324,122 @@ function playReaction(name, { then = null } = {}) {
     return;
   }
   setState(def.anim, { then, emote: name });
+}
+
+// ---- Claude desktop's queue (its MCP tools) ----
+//
+// Claude calls the tools in quick bursts (working, a reaction, done within a second).
+// Instead of each call cutting off the one before, they wait here and play in order:
+// a reaction plays to its end and stays on screen at least MIN_SHOWN (a looping one, at
+// the end of a cycle); working, done and idle sit down or stand up fully first.
+// Claude Code's hooks, the tray and clicks don't queue: they act at once, as they always
+// have, and what waits here plays once the pet is free again.
+const QUEUE_MAX = 5;                    // waiting commands; beyond that the oldest waiting ones go
+const MIN_SHOWN = 1500;                 // ms a queued reaction stays on screen, at least
+const LOOP_ALONE = 4000;                // ms a looping reaction plays when nothing waits after it
+const GLUM = new Set(['sad', 'angry']); // "done" after one of these doesn't celebrate
+
+let queue = [];           // waiting commands, oldest first: { reaction } or { state, celebrate }
+let playing = null;       // the queued reaction on screen (see startReaction)
+let mood = null;          // the last reaction since the last "working" or "done", as they arrive
+let replyWorking = false; // "working" has played, and no done, waiting or idle since
+
+// A command from Claude desktop (main.js passes it on; the listener has checked the names).
+// The mood is taken as commands arrive, so a "done" knows what came before it even if
+// that reaction was dropped from a full queue.
+function queueCommand({ reaction, state: name } = {}) {
+  let command;
+  if (reaction && EMOTES[reaction]) {
+    mood = reaction;
+    command = { reaction };
+  } else if (name === 'done') {
+    command = { state: 'done', celebrate: !GLUM.has(mood) };
+    mood = null;
+  } else if (name === 'working' || name === 'waiting' || name === 'idle') {
+    if (name === 'working') mood = null;
+    command = { state: name };
+  } else {
+    return;
+  }
+  queue.push(command);
+  if (queue.length > QUEUE_MAX) queue.splice(0, queue.length - QUEUE_MAX);
+  runQueue(performance.now());
+}
+
+// Free for the next command: not in the middle of something that ends by itself (a
+// one-shot animation such as a hook's stars or a click's love, sitting down, standing up).
+const petFree = () => ANIMATIONS[state] !== undefined && ANIMATIONS[state].loop === true;
+
+// Runs every frame, and when a command arrives.
+function runQueue(now) {
+  if (playing) {
+    const p = playing;
+    if (p.since === null) {
+      if (state === 'standUp') return; // still standing up to it
+      if (state !== p.anim) { // went somewhere else instead: let it go
+        playing = null;
+        return;
+      }
+      p.since = now;
+    }
+    const shown = now - p.since;
+    let over;
+    if (p.loop) {
+      // At the end of an emote cycle: on to what waits, or back after LOOP_ALONE.
+      over = p.cycleEnded && (queue.length ? shown >= MIN_SHOWN : !p.stays && shown >= LOOP_ALONE);
+      p.cycleEnded = false;
+    } else {
+      over = p.ended && shown >= MIN_SHOWN; // holds its last frame until then
+    }
+    if (!over) return;
+    playing = null;
+    if (queue.length) startCommand(queue.shift());
+    else setState(p.back);
+    return;
+  }
+  if (queue.length && petFree()) startCommand(queue.shift());
+}
+
+function startCommand(command) {
+  if (command.reaction) {
+    startReaction(command.reaction);
+    return;
+  }
+  switch (command.state) {
+    case 'working':
+      replyWorking = true;
+      if (state !== 'work') setState('sitDown');
+      break;
+    case 'waiting':
+      replyWorking = false;
+      startReaction('ask', { stays: true }); // keeps asking until the next command
+      break;
+    case 'done':
+      replyWorking = false;
+      if (command.celebrate) startReaction('stars', { back: 'idle' });
+      else setState('idle'); // after sad or angry: just stand up (if working) and idle
+      break;
+    case 'idle':
+      replyWorking = false;
+      setState('idle');
+      break;
+  }
+}
+
+// From the laptop a reaction plays standing up, then Terra sits back down unless the
+// reply is over (or something else waits: then that plays next).
+function startReaction(name, { stays = false, back = null } = {}) {
+  const def = EMOTES[name];
+  const then = back || (replyWorking || state === 'work' ? 'sitDown' : 'idle');
+  playing = { name, anim: def.anim, loop: !!def.loop, stays, back: then, since: null, ended: false, cycleEnded: false };
+  playReaction(name, { then: def.loop ? null : then });
+  if (state === def.anim) playing.since = performance.now();
+}
+
+// A hook, the tray or a click changes the pet at once; a queued reaction on screen
+// counts as finished then.
+function takeOver() {
+  playing = null;
 }
 
 // Blink, patrol and the sleep timer only run in idle, so they are paused in
@@ -425,6 +552,7 @@ function endPress() {
 
 function onClick() {
   const now = performance.now();
+  takeOver();
   if (state === 'sleep') {
     clickTimes = [];
     setState('wave');
@@ -442,8 +570,15 @@ function onClick() {
 
 // ---- Messages from the main process ----
 
-window.terra.onSetState((name, options) => setState(name, { then: options && options.then }));
-window.terra.onPlayReaction((name, options) => playReaction(name, { then: options && options.then }));
+window.terra.onSetState((name, options) => {
+  takeOver();
+  setState(name, { then: options && options.then });
+});
+window.terra.onPlayReaction((name, options) => {
+  takeOver();
+  playReaction(name, { then: options && options.then });
+});
+window.terra.onCommand((command) => queueCommand(command));
 window.terra.onSetScale((next) => applyScale(next));
 
 // visible: shown again (greet: because Claude desktop just opened). Not visible: finish
@@ -464,7 +599,10 @@ window.terra.onVisibility(({ visible, greet = false, now = false }) => {
     nextBlinkAt = t + rand(BLINK_EVERY);
     nextPatrolAt = t + rand(PATROL_EVERY);
   }
-  if (greet) playReaction('hi', { then: state === 'work' || state === 'sitDown' ? 'sitDown' : null });
+  if (greet) {
+    takeOver();
+    playReaction('hi', { then: state === 'work' || state === 'sitDown' ? 'sitDown' : null });
+  }
 });
 
 window.terra.onSetPatrol((on) => {
@@ -491,6 +629,7 @@ function tick() {
   if (scale * devicePixelRatio !== px) applyScale(scale);
   advance(dt);
   advanceEmote(dt);
+  runQueue(now);
   updateWalk(dt);
   updateIdle(now);
   draw();

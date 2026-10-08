@@ -131,13 +131,22 @@ Claude two tools. Claude decides when to call them:
 | Claude calls... | When | Terra |
 | :- | :- | :- |
 | `terra_state("working")` | before a long answer or a multi-step task | sits down to work |
-| `terra_state("done")` | when it has finished | is happy, with stars, then idles |
+| `terra_state("done")` | when it has finished | is happy, with stars, then idles (after a sad or angry reaction in the same reply: just stands up and idles) |
 | `terra_state("waiting")` | when it needs your answer or approval | asks, with a question mark |
 | `terra_state("idle")` | when it stops without finishing | stands up and idles |
 | `terra_react("love")`, ... | when the moment has a feeling | plays that [reaction](#reactions), then goes back to what it was doing |
 
 `terra_react` takes any of the eight reactions: `hi`, `love`, `angry`, `sad`, `idea`,
 `stars`, `talk` or `ask`.
+
+Claude often makes these calls a moment apart (working, a reaction, done, all within a
+second), so Terra plays them one after another instead of letting each one cut off the
+last. A reaction plays to its end and stays on screen for at least 1.5 seconds (a looping
+one, like sad, to the end of a cycle); sitting down and standing up finish first. A
+reaction while Terra is at its computer plays standing up, then Terra sits back down, or
+goes on to `done` if that came next. Up to 5 calls wait their turn; when more arrive, the
+oldest waiting ones are dropped. Claude Code's hooks, the menu and clicks don't wait: they
+act at once, as before, and the waiting calls play after.
 
 ### Install the tools
 

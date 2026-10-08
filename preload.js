@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('terra', {
   setMouseOverPet: (on) => ipcRenderer.send('pet:mouse-over-pet', on),
   onSetState: (callback) => ipcRenderer.on('pet:set-state', (_event, name, options) => callback(name, options)),
   onPlayReaction: (callback) => ipcRenderer.on('pet:play-reaction', (_event, name, options) => callback(name, options)),
+  onCommand: (callback) => ipcRenderer.on('pet:command', (_event, command) => callback(command)),
   onSetPatrol: (callback) => ipcRenderer.on('pet:set-patrol', (_event, on) => callback(on)),
   onSetScale: (callback) => ipcRenderer.on('pet:set-scale', (_event, scale) => callback(scale)),
   onVisibility: (callback) => ipcRenderer.on('pet:visibility', (_event, change) => callback(change)),

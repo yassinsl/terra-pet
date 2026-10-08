@@ -1,9 +1,10 @@
 // The Claude desktop app's side, end to end: the real MCP server (started the way the
 // config written by mcp:install starts it) -> listener -> the running pet. Every tool and
-// name, reactions while working, and the tray's Claude desktop items on a temp config.
+// name, reactions while working, calls close together (the queue, and "done" after sad),
+// and the tray's Claude desktop items on a temp config.
 // Run: npx electron test/e2e/mcp.e2e.js   (or npm test)
 const {
-  ROOT, t, check, section, wait, menuItem, waitFor, compress, step, start, fs, path,
+  ROOT, EMOTES, t, check, section, wait, js, menuItem, clipMs, takeFrames, waitFor, compress, attempt, step, start, fs, path,
 } = require('./lib.js');
 const { app, dialog } = require('electron');
 const { Client } = require('@modelcontextprotocol/client');
@@ -27,6 +28,35 @@ async function tool(name, args) {
 }
 const react = (reaction) => () => tool('terra_react', { reaction });
 const setState = (state) => () => tool('terra_state', { state });
+
+// Calls the tools one after another as fast as they go, the way Claude does in a burst.
+// Resolves to how long sending them all took (ms), or to what went wrong.
+async function burst(...calls) {
+  const t0 = Date.now();
+  for (const call of calls) {
+    const [name, args] = call.startsWith('state:') ? ['terra_state', { state: call.slice(6) }] : ['terra_react', { reaction: call }];
+    const r = await tool(name, args);
+    if (r) return r;
+  }
+  return Date.now() - t0;
+}
+
+// The states reported since `from`, repeats merged, each with how long it lasted (ms).
+function timeline(from) {
+  const list = t.states.slice(from).filter((s, i, a) => i === 0 || s.state !== a[i - 1].state);
+  return list.map((s, i) => ({ state: s.state, ms: (list[i + 1] ? list[i + 1].t : Date.now()) - s.t }));
+}
+const showTimeline = (tl) => tl.map((s) => `${s.state} ${s.ms}`).join(' -> ');
+// Emotes drawn since the last takeFrames(), in order, repeats merged.
+const emotesDrawn = async () => (await takeFrames()).filter((f) => f.emote).map((f) => f.emote.replace(/-\d+$/, ''))
+  .filter((e, i, a) => i === 0 || e !== a[i - 1]);
+
+// A Claude Code hook event, the way the hook script sends it.
+async function hookEvent(body) {
+  const port = fs.readFileSync(path.join(process.env.HOME, '.terra-pet', 'port'), 'utf8').trim();
+  const r = await fetch(`http://127.0.0.1:${port}/event`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  return String(r.status);
+}
 
 start(async () => {
   const entry = mcp.terraEntry(); // Electron in Node mode, this repo's mcp/terra-mcp.js
@@ -54,10 +84,12 @@ start(async () => {
   }
   for (const reaction of ['talk', 'sad', 'ask']) {
     const from = t.states.length;
-    await step(`${reaction} (loops, ends after 4 s)`, react(reaction), [reaction, 'idle'], [reaction], 'idle');
+    await step(`${reaction} (loops 4 s, then to the end of its cycle)`, react(reaction), [reaction, 'idle'], [reaction], 'idle');
     const seen = t.states.slice(from);
     const ms = seen.find((s) => s.state === 'idle')?.t - seen.find((s) => s.state === reaction)?.t;
-    check(`  ${reaction} lasted about 4 s`, ms > 3700 && ms < 4800, `${ms} ms`);
+    const cycle = clipMs(EMOTES[reaction]).reduce((a, b) => a + b, 0);
+    const want = Math.ceil(4000 / cycle) * cycle;
+    check(`  ${reaction} lasted ${want} ms (whole ${cycle} ms emote cycles, 4 s at least)`, Math.abs(ms - want) < 150, `${ms} ms`);
   }
 
   section('terra_react while working: back to work after');
@@ -65,17 +97,84 @@ start(async () => {
   await step('love while working', react('love'), ['standUp', 'love', 'sitDown', 'work'], ['love'], 'work');
   await step('talk while working (loop)', react('talk'), ['standUp', 'talk', 'sitDown', 'work'], ['talk'], 'work');
   {
-    // A new command cancels a looping reaction's 4 s timer.
+    // A command waiting behind a looping reaction starts at the end of a cycle once the
+    // reaction has shown 1.5 s, and the 4 s it would have looped alone no longer apply.
     const from = t.states.length;
     await tool('terra_react', { reaction: 'sad' });
     await waitFor('sad', 3000, from);
     await tool('terra_state', { state: 'waiting' });
-    await waitFor('ask', 3000, from);
+    await waitFor('ask', 4000, from);
     await wait(4500);
-    const seen = compress(t.states.slice(from));
-    check('state after a loop reaction is kept', seen.join(' ') === 'standUp sad ask', seen.join(' -> '));
+    const tl = timeline(from);
+    const sad = tl.find((s) => s.state === 'sad');
+    check('state after a loop reaction is kept', tl.map((s) => s.state).join(' ') === 'standUp sad ask' && sad.ms >= 1500, showTimeline(tl));
   }
-  await step('done', setState('done'), ['happy', 'idle'], ['stars'], 'idle');
+  await step('done after sad: no stars, just idle', setState('done'), ['idle'], [], 'idle');
+
+  section('calls close together play in order (queue)');
+  await attempt('working, sad, done within 100 ms: sad 1.5 s+, then idle, no stars', async () => {
+    await waitFor('idle', 6000);
+    await wait(300);
+    await takeFrames();
+    const from = t.states.length;
+    const sent = await burst('state:working', 'sad', 'state:done');
+    await waitFor('idle', 12000, from);
+    await wait(400);
+    const tl = timeline(from);
+    const emotes = await emotesDrawn();
+    const sad = tl.find((s) => s.state === 'sad');
+    const ok = typeof sent === 'number' && sent < 100 && tl.map((s) => s.state).join(' ') === 'sitDown work standUp sad idle'
+      && sad.ms >= 1500 && emotes.join(' ') === 'sad';
+    return { ok, line: `sent in ${sent} ms; ${showTimeline(tl)} ms; emotes ${emotes.join(', ') || 'none'}` };
+  });
+  await attempt('working, love, done: love to its end, then stars', async () => {
+    await waitFor('idle', 6000);
+    await wait(300);
+    await takeFrames();
+    const from = t.states.length;
+    const sent = await burst('state:working', 'love', 'state:done');
+    await waitFor('idle', 12000, from);
+    await wait(400);
+    const tl = timeline(from);
+    const emotes = await emotesDrawn();
+    const love = tl.find((s) => s.state === 'love');
+    const ok = typeof sent === 'number' && sent < 100 && tl.map((s) => s.state).join(' ') === 'sitDown work standUp love happy idle'
+      && love.ms >= 1500 && emotes.join(' ') === 'love stars';
+    return { ok, line: `sent in ${sent} ms; ${showTimeline(tl)} ms; emotes ${emotes.join(', ')}` };
+  });
+  await attempt('7 reactions at once: 5 wait, the oldest waiting one dropped, the playing one kept', async () => {
+    await waitFor('idle', 6000);
+    await wait(300);
+    await takeFrames();
+    const from = t.states.length;
+    const sent = await burst('hi', 'love', 'angry', 'idea', 'talk', 'ask', 'sad');
+    const right = await js("[playing && playing.name, queue.map((c) => c.reaction || c.state).join(' ')]");
+    await waitFor('idle', 25000, from + 1);
+    await wait(400);
+    const tl = timeline(from);
+    const emotes = await emotesDrawn();
+    const wave = tl.find((s) => s.state === 'wave');
+    const ok = typeof sent === 'number' && right[0] === 'hi' && right[1] === 'angry idea talk ask sad'
+      && tl.map((s) => s.state).join(' ') === 'wave angry idea talk ask sad idle' && wave.ms >= 1900 && emotes.join(' ') === 'hi angry idea talk ask sad';
+    return { ok, line: `sent in ${sent} ms; then playing ${right[0]}, waiting: ${right[1]}; ${showTimeline(tl)} ms; emotes ${emotes.join(', ')}` };
+  });
+  await attempt('a Claude Code hook still acts at once; the queue waits for it', async () => {
+    await waitFor('idle', 6000);
+    await wait(300);
+    const from = t.states.length;
+    await burst('state:working', 'sad', 'state:done');
+    await waitFor('sad', 4000, from);
+    await wait(300);
+    const at = Date.now();
+    const status = await hookEvent({ event: 'stop' }); // stars, then idle
+    await waitFor('happy', 1000, from);
+    const after = Date.now() - at;
+    await waitFor('idle', 6000, from);
+    await wait(2500); // the queued "done" (after sad: just idle) has come and gone
+    const tl = timeline(from);
+    const ok = status === '204' && after < 300 && tl.map((s) => s.state).join(' ') === 'sitDown work standUp sad happy idle' && (await js('queue.length + (playing ? 1 : 0)')) === 0;
+    return { ok, line: `hook HTTP ${status}, stars ${after} ms after it; ${showTimeline(tl)} ms` };
+  });
 
   section('tray: Claude desktop (temp HOME, so a temp config)');
   const config = mcp.defaultConfigPath();
