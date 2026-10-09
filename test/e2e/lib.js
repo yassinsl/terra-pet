@@ -36,7 +36,8 @@ Tray.prototype.setContextMenu = function (menu) {
 };
 const realIgnore = BrowserWindow.prototype.setIgnoreMouseEvents;
 BrowserWindow.prototype.setIgnoreMouseEvents = function (ignore, options) {
-  t.ignoreCalls.push({ ignore, forward: !!(options && options.forward) });
+  // The pet's window only (the first; browser-window-created runs inside its constructor).
+  if (!t.win || this === t.win) t.ignoreCalls.push({ ignore, forward: !!(options && options.forward) });
   return realIgnore.call(this, ignore, options);
 };
 ipcMain.on('pet:state', (_e, state, next) => t.states.push({ t: Date.now(), state, next }));

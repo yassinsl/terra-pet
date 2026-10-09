@@ -9,6 +9,8 @@ const windowState = require('./window-state.js');
 const visibility = require('./visibility.js');
 const claude = require('./claude-app.js'); // used as claude.isRunning() so tests can fake it
 const openWithClaude = require('./open-with-claude.js');
+const { createBubbleWindow } = require('./bubble-window.js');
+const { layoutBubble } = require('./bubble-layout.js');
 const { HOST, startListener, removePortFile } = require('./listener.js');
 const { matchReaction } = require('./reactions.js');
 
@@ -32,7 +34,7 @@ let pet = { state: null, next: null, since: Date.now() }; // as last reported by
 let lastEventAt = Date.now();
 let mouseOnPet = false;
 let saveTimer = null;
-let prefs = { showWhen: visibility.DEFAULT_MODE, loginItemDefaultDone: false };
+let prefs = { showWhen: visibility.DEFAULT_MODE, loginItemDefaultDone: false, speechBubbles: true };
 let claudeRunning = null; // Claude desktop, as of the last check (null: not known yet)
 let lastCodeEventAt = 0;  // last Claude Code hook event
 let petShown = false;
@@ -44,6 +46,9 @@ let polling = false;
 const openedByClaude = process.argv.includes('--opened-by-claude');
 const mcpSessions = new Set(); // MCP servers (one per running Claude desktop) that said hello
 let claudeQuitTimer = null;
+let bubble = null;     // the speech bubble's window (bubble-window.js)
+let sayCount = 0;
+let pendingSay = null; // { id, layout }: the newest terra_say, until the pet starts talking it
 
 // The packaged app has no npm scripts, so it takes these instead:
 //   Terra --install-hooks | --uninstall-hooks [--settings <path>]
@@ -154,6 +159,38 @@ function onPetCommand({ reaction, state, mood }) {
   sendToPet('pet:command', reaction ? { reaction } : mood ? { state, mood } : { state });
 }
 
+// terra_say from Claude desktop (the listener has checked it is short text). The pet queues
+// it like the other commands and, when its turn comes, talks while the bubble shows.
+// The text stays in memory: never logged, never saved. Answers 409 when bubbles are off
+// and 422 when nothing in the text can be drawn.
+function onSay({ text }) {
+  if (!prefs.speechBubbles) return 409;
+  const layout = layoutBubble(text);
+  if (!layout) return 422;
+  lastEventAt = Date.now();
+  pendingSay = { id: ++sayCount, layout };
+  sendToPet('pet:command', { say: pendingSay.id });
+  return undefined;
+}
+
+// The pet has started talking bubble `id` (renderer/pet.js); show it, unless it has been
+// replaced since, or bubbles were turned off, or the pet is hidden.
+function showBubble(id) {
+  const say = pendingSay;
+  if (say && say.id === id) pendingSay = null;
+  if (say && say.id === id && prefs.speechBubbles && petShown && !hidePending) bubble.show(id, say.layout);
+  else sendToPet('pet:bubble-ended', id);
+}
+
+function setSpeechBubbles(on) {
+  prefs.speechBubbles = on;
+  savePrefs();
+  if (!on) {
+    pendingSay = null;
+    bubble.hide();
+  }
+}
+
 // Stop and StopFailure don't fire when you interrupt Claude, so don't trust
 // "work" (or waiting) forever.
 function checkStuck() {
@@ -223,6 +260,7 @@ function hideNow() {
   hidePending = false;
   petShown = false;
   setMouseOnPet(false);
+  bubble.hide();
   win.hide();
   console.log('Terra: hidden');
 }
@@ -290,6 +328,7 @@ function setScale(next) {
     scale = next;
     win.setBounds(target);
     sendToPet('pet:set-scale', scale);
+    bubble.follow({ resized: true });
     const now = win.getBounds();
     if (now.width !== target.width || now.height !== target.height) {
       console.error(`Terra: asked for ${target.width}x${target.height} at ${next}x but the window is ${now.width}x${now.height}`);
@@ -348,7 +387,12 @@ function createWindow() {
     sendToPet('pet:set-patrol', patrolEnabled);
     if (!wantShown()) sendToPet('pet:visibility', { visible: false, now: true });
   });
-  win.on('move', saveSoon);
+  win.on('move', () => {
+    saveSoon();
+    bubble.follow(); // the speech bubble follows the pet while it walks or is dragged
+  });
+
+  bubble = createBubbleWindow({ petWindow: win, getScale: () => scale, onEnded: (id) => sendToPet('pet:bubble-ended', id) });
 }
 
 // ---- Tray ----
@@ -434,6 +478,12 @@ function updateTrayMenu() {
       submenu: visibility.MODES.map((m) => ({ label: m.label, type: 'radio', checked: prefs.showWhen === m.id, click: () => setShowWhen(m.id) })),
     },
     {
+      label: 'Speech bubbles',
+      type: 'checkbox',
+      checked: prefs.speechBubbles,
+      click: (item) => setSpeechBubbles(item.checked),
+    },
+    {
       label: 'Patrol',
       type: 'checkbox',
       checked: patrolEnabled,
@@ -485,6 +535,10 @@ function startApp() {
   ipcMain.on('pet:state', (event, state, next) => {
     if (!win || event.sender !== win.webContents) return;
     pet = { state, next, since: state === pet.state ? pet.since : Date.now() };
+  });
+
+  ipcMain.on('pet:show-bubble', (event, id) => {
+    if (win && event.sender === win.webContents && Number.isInteger(id)) showBubble(id);
   });
 
   ipcMain.on('pet:mouse-over-pet', (event, on) => {
@@ -541,7 +595,7 @@ function startApp() {
     for (const file of [hooks.defaultSettingsPath(), hooks.hookCopyPath()]) fs.watchFile(file, { interval: 2000 }, refreshHooksStatus);
     fs.watchFile(mcp.defaultConfigPath(), { interval: 2000 }, refreshMcpStatus);
     try {
-      listener = await startListener(onHookEvent, onPetCommand, onServer);
+      listener = await startListener(onHookEvent, onPetCommand, onServer, onSay);
     } catch (err) {
       listenerError = err.message;
       console.error('Terra listener not started:', err.message);

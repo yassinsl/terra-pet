@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <!-- Nothing but this page's own script and the bubble art: no other content, ever. -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'">
+    <title>Terra bubble</title>
+    <style>
+      html, body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        user-select: none;
+      }
+      canvas {
+        display: block;
+        image-rendering: pixelated;
+        cursor: pointer;
+      }
+      canvas.fading {
+        opacity: 0;
+        transition: opacity 200ms linear;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="bubble" width="0" height="0"></canvas>
+    <script src="bubble.js"></script>
+  </body>
+</html>

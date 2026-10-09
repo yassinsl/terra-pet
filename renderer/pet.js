@@ -339,7 +339,7 @@ const MIN_SHOWN = 1500;                 // ms a queued reaction stays on screen,
 const LOOP_ALONE = 4000;                // ms a looping reaction plays when nothing waits after it
 const GLUM = new Set(['sad', 'angry']); // "done" after one of these, with no mood, doesn't celebrate
 
-let queue = [];           // waiting commands, oldest first: { reaction } or { state, ending }
+let queue = [];           // waiting commands, oldest first: { reaction }, { state, ending } or { say }
 let playing = null;       // the queued reaction on screen (see startReaction)
 let mood = null;          // the last reaction since the last "working" or "done", as they arrive
 let replyWorking = false; // "working" has played, and no done, waiting or idle since
@@ -349,9 +349,24 @@ let replyWorking = false; // "working" has played, and no done, waiting or idle 
 // that reaction was dropped from a full queue: the mood Claude gave it (happy, sad, angry
 // or neutral) or, with none, the last reaction in this reply (sad or angry: neutral, any
 // other: happy), or neutral when there was none either.
-function queueCommand({ reaction, state: name, mood: doneMood } = {}) {
+function queueCommand({ reaction, state: name, mood: doneMood, say } = {}) {
   let command;
-  if (reaction && EMOTES[reaction]) {
+  if (Number.isInteger(say)) {
+    // A speech bubble (terra_say; main.js keeps the text). A newer one replaces the one
+    // on screen, or the one waiting, rather than waiting behind it.
+    if (playing && playing.say) {
+      playing.say = say;
+      playing.bubbleEnded = false;
+      window.terra.showBubble(say);
+      return;
+    }
+    const waiting = queue.findIndex((c) => c.say);
+    if (waiting >= 0) {
+      queue[waiting] = { say };
+      return;
+    }
+    command = { say };
+  } else if (reaction && EMOTES[reaction]) {
     mood = reaction;
     command = { reaction };
   } else if (name === 'done') {
@@ -391,7 +406,9 @@ function runQueue(dt) {
     }
     const { shown } = p;
     let over;
-    if (p.loop) {
+    if (p.say) {
+      over = p.bubbleEnded; // talks for as long as its bubble shows
+    } else if (p.loop) {
       // At the end of an emote cycle: on to what waits (or, played once, on to `back`),
       // or back after LOOP_ALONE.
       over = p.cycleEnded && (queue.length || p.once ? shown >= MIN_SHOWN : !p.stays && shown >= LOOP_ALONE);
@@ -411,6 +428,10 @@ function runQueue(dt) {
 function startCommand(command) {
   if (command.reaction) {
     startReaction(command.reaction);
+    return;
+  }
+  if (command.say) {
+    startSay(command.say);
     return;
   }
   switch (command.state) {
@@ -445,6 +466,22 @@ function startReaction(name, { stays = false, once = false, back = null } = {}) 
   playing = { name, anim: def.anim, loop: !!def.loop, stays, once, back: then, shown: null, ended: false, cycleEnded: false };
   playReaction(name, { then: def.loop ? null : then });
   if (state === def.anim) playing.shown = 0;
+}
+
+// Talks (the talk animation without its emote: the bubble is the speech) while main.js
+// shows speech bubble `id`, then goes back like a reaction does.
+function startSay(id) {
+  const then = replyWorking || state === 'work' ? 'sitDown' : 'idle';
+  playing = { name: 'say', say: id, anim: 'talk', loop: true, back: then, shown: null, bubbleEnded: false, cycleEnded: false };
+  setState('talk');
+  if (state === 'talk') playing.shown = 0;
+  window.terra.showBubble(id);
+}
+
+function bubbleEnded(id) {
+  if (!playing || playing.say !== id) return;
+  playing.bubbleEnded = true;
+  runQueue(0);
 }
 
 // A hook, the tray or a click changes the pet at once; a queued reaction on screen
@@ -590,6 +627,7 @@ window.terra.onPlayReaction((name, options) => {
   playReaction(name, { then: options && options.then });
 });
 window.terra.onCommand((command) => queueCommand(command));
+window.terra.onBubbleEnded((id) => bubbleEnded(id));
 window.terra.onSetScale((next) => applyScale(next));
 
 // visible: shown again (greet: because Claude desktop just opened). Not visible: finish

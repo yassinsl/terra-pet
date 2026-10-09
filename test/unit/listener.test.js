@@ -1,5 +1,6 @@
 // listener.js on its own (no Electron): port choice, port file, accepted and rejected
-// requests on both routes (/event from the hook, /mcp from the Claude desktop MCP server).
+// requests on every route (/event from the hook; /mcp and /say from the Claude desktop
+// MCP server).
 const { ROOT, check, section, summary, isolateHome, PROMPT_MARK } = require('../lib.js');
 
 const home = isolateHome('listener');
@@ -168,8 +169,64 @@ function curl(args, body) {
     check(`  ${label}`, code === want, `HTTP ${code} (want ${want})`);
   }
   check('  none reached either handler', commands.length === 0 && events.length === 0, `${commands.length} commands, ${events.length} events`);
-
   a.server.close();
   removePortFile(port);
+
+  section('/say: speech bubble text');
+  const said = [];
+  let sayAnswer;
+  const sayListener = await startListener(() => {}, () => {}, () => ({}), (s) => {
+    said.push(s.text);
+    return sayAnswer;
+  });
+  const postSay = (body, extra = []) => curl(['-H', 'Content-Type: application/json', '--data-binary', '@-', ...extra, `http://127.0.0.1:${sayListener.port}/say`],
+    typeof body === 'string' ? body : JSON.stringify(body));
+  const words = `Paris is the capital of France! ${PROMPT_MARK}`;
+  sayAnswer = undefined;
+  let code = await postSay({ text: words });
+  check('  text accepted: 204, passed on as is', code === '204' && said.length === 1 && said[0] === words, `HTTP ${code}`);
+  sayAnswer = 409;
+  code = await postSay({ text: 'Tokyo!' });
+  check('  bubbles off: 409', code === '409', `HTTP ${code}`);
+  sayAnswer = 422;
+  code = await postSay({ text: '😀' });
+  check('  nothing drawable: 422', code === '422', `HTTP ${code}`);
+  check('  the default (no handler): 409, bubbles off', (await (async () => {
+    const d = await startListener(() => {});
+    const r = await curl(['-H', 'Content-Type: application/json', '--data-binary', '{"text":"hi"}', `http://127.0.0.1:${d.port}/say`]);
+    d.server.close();
+    removePortFile(d.port);
+    return r;
+  })()) === '409');
+  said.length = 0;
+  const sayRejects = [
+    ['empty text', { text: '' }, '400'],
+    ['text over 500 characters', { text: 'x'.repeat(501) }, '400'],
+    ['text not a string', { text: ['hi'] }, '400'],
+    ['no text', {}, '400'],
+    ['an extra field', { text: 'hi', html: '<b>hi</b>' }, '400'],
+    ['a reaction on /say', { reaction: 'hi' }, '400'],
+    ['__proto__ key', '{"__proto__": {"text": "hi"}}', '400'],
+    ['not JSON', 'text=hi', '400'],
+  ];
+  for (const [label, body, want] of sayRejects) {
+    code = await postSay(body);
+    check(`  ${label}`, code === want, `HTTP ${code} (want ${want})`);
+  }
+  const sayBig = JSON.stringify({ text: 'x'.repeat(70 * 1024) });
+  for (const [label, send, want] of [
+    ['body over 64 KB', () => postSay(sayBig), '413'],
+    ['no Content-Type (form post)', () => curl(['--data-binary', '{"text":"hi"}', `http://127.0.0.1:${sayListener.port}/say`]), '415'],
+    ['GET /say', () => curl([`http://127.0.0.1:${sayListener.port}/say`]), '405'],
+    ['browser Origin header', () => postSay({ text: 'hi' }, ['-H', 'Origin: https://evil.example']), '403'],
+    ['foreign Host header (DNS rebinding)', () => postSay({ text: 'hi' }, ['-H', `Host: evil.example:${sayListener.port}`]), '403'],
+  ]) {
+    code = await send();
+    check(`  ${label}`, code === want, `HTTP ${code} (want ${want})`);
+  }
+  check('  none of those reached the handler', said.length === 0, `${said.length} texts`);
+  check('  bubble text never logged', !logged.some((l) => l.includes(PROMPT_MARK)), `${logged.length} log lines`);
+  sayListener.server.close();
+  removePortFile(sayListener.port);
   process.exitCode = summary() ? 1 : 0;
 })();

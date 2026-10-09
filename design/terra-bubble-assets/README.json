@@ -1,0 +1,14 @@
+{
+ "colors": {
+  "fill": "#FFF4DC",
+  "shade": "#E8D9B8",
+  "outline_and_text": "#231627"
+ },
+ "bubble-9slice.png": "14x14 art px including the 1px outline. Slice 4px from every edge; stretch the middle.",
+ "tail-right.png / tail-left.png": "Patch drawn OVER the bubble bottom edge. Its top 2 rows overlap the shade row and bottom outline of the body, which removes the outline where the tail joins. Place right tail so its left edge is 10 px from the bubble right edge; left tail 5 px from the bubble left edge; top aligned with the shade row.",
+ "padding": "text starts 5 px from the left outline and 4 px below the top outline (art px)",
+ "layout": "max 2 lines, about 20 characters each; trim longer text with ...",
+ "timing": "pop-in frame 80 ms, hold 4 s + 50 ms per character (max 10 s), fade 200 ms",
+ "scale": "all assets are 1x art pixels; scale by the pet Size with nearest-neighbour only",
+ "examples": "examples-1x and examples-4x are finished bubbles to compare your render against, pixel for pixel"
+}

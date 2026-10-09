@@ -1,8 +1,9 @@
 // mcp/terra-mcp.js over stdio, started the way the Claude desktop config starts it
 // (Electron in Node mode), against a test listener: tool list, every tool and name,
-// bad arguments, and what happens when Terra isn't running, is too old, or hangs.
+// terra_say's text, bad arguments, and what happens when Terra isn't running, is too
+// old, has speech bubbles off, or hangs.
 // Both protocol eras: the official client (2026-07-28) and a 2025-style `initialize`.
-const { ROOT, check, section, summary, isolateHome } = require('../lib.js');
+const { ROOT, check, section, summary, isolateHome, PROMPT_MARK } = require('../lib.js');
 
 const home = isolateHome('mcp-server');
 // These tests are about the tools; opening the pet when it isn't running is
@@ -22,6 +23,7 @@ const { terraEntry } = require(path.join(ROOT, 'mcp-installer.js'));
 const ENTRY = terraEntry(); // exactly what mcp:install writes
 const PORT_FILE = path.join(home, '.terra-pet', 'port');
 const commands = [];
+const said = []; // texts that reached /say
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const textOf = (r) => (r.content || []).map((c) => c.text).join(' ');
 
@@ -73,7 +75,9 @@ function rawSession() {
 (async () => {
   check('reactions are exactly the emotes', same([...REACTIONS].sort(), Object.keys(EMOTES).sort()), REACTIONS.join(', '));
 
-  const listener = await startListener(() => {}, (c) => commands.push(c));
+  const listener = await startListener(() => {}, (c) => commands.push(c), () => ({}), (s) => {
+    said.push(s.text);
+  });
   const transport = new StdioClientTransport({ command: ENTRY.command, args: ENTRY.args, env: { ...ENTRY.env, HOME: home }, stderr: 'pipe' });
   let stderr = '';
   transport.stderr.on('data', (d) => (stderr += d));
@@ -89,7 +93,7 @@ function rawSession() {
     && ['thanks -> happy', 'an insult -> angry', 'bad news -> sad', 'a normal answer -> neutral'].every((e) => instructions.replace(/\s+/g, ' ').includes(e)));
   const { tools } = await client.listTools();
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
-  check('exactly terra_react and terra_state', same(tools.map((t) => t.name).sort(), ['terra_react', 'terra_state']), tools.map((t) => t.name).join(', '));
+  check('exactly terra_react, terra_say and terra_state', same(tools.map((t) => t.name).sort(), ['terra_react', 'terra_say', 'terra_state']), tools.map((t) => t.name).join(', '));
   const react = byName.terra_react;
   const state = byName.terra_state;
   check('terra_react: one required enum of the 8 reactions', same(react.inputSchema.required, ['reaction']) && same(react.inputSchema.properties.reaction.enum, REACTIONS) && Object.keys(react.inputSchema.properties).length === 1,
@@ -129,8 +133,39 @@ function rawSession() {
     check('  a mood with "working": dropped, only the state sent', !other.isError && same(commands, [{ state: 'working' }]), JSON.stringify(commands));
   }
 
+  section('terra_say');
+  {
+    const sayTool = byName.terra_say;
+    const d = sayTool.description;
+    check('one required string, text', same(sayTool.inputSchema.required, ['text']) && sayTool.inputSchema.properties.text.type === 'string' && Object.keys(sayTool.inputSchema.properties).length === 1);
+    check('description: short answers and friendly remarks, with the examples', /short, simple answers and friendly remarks/.test(d) && d.includes('"Paris is the capital of France!"') && d.includes('"Happy to help!"'));
+    check('  not for code, lists, long explanations or anything sensitive; once per reply', /Do not use it for code, lists, long explanations or anything sensitive/.test(d) && /At most once per reply/.test(d));
+    check('  says what fits: 2 lines of about 20 characters, cut with "..."', /2 lines of about 20 characters each; longer text is cut with "\.\.\."/.test(d));
+    check('server instructions say the same', /terra_say for short, simple answers and friendly remarks/.test(instructions.replace(/\s+/g, ' ')) && /at most once per reply; never for code, lists, long explanations or anything sensitive/.test(instructions.replace(/\s+/g, ' ')));
+    const call = (text) => client.callTool({ name: 'terra_say', arguments: { text } });
+    said.length = 0;
+    let r = await call('Paris is the capital of France!');
+    check('reaches Terra as the font will draw it; Claude is told what shows', !r.isError && same(said, ['PARIS IS THE CAPITAL OF FRANCE!']) && textOf(r) === 'Terra says: "PARIS IS THE CAPITAL / OF FRANCE!".', `"${textOf(r)}"`);
+    said.length = 0;
+    r = await call('The quick brown fox jumps over the lazy dog, again and again, all day long, until the sun goes down');
+    check('  long text: cut to fit, and Claude is asked to keep it shorter', !r.isError && /JUMPS OVER THE\.\.\."/.test(textOf(r)) && /keep it shorter next time/.test(textOf(r)) && said.length === 1, `"${textOf(r)}"`);
+    said.length = 0;
+    r = await call('<b>Hi</b> <script>alert(1)</script>\u0007\u202e');
+    check('  HTML and control characters: only plain glyphs are sent', !r.isError && said.length === 1 && /^[A-Z0-9 .,!?:'+()\/-]+$/.test(said[0]) && !/[<>\u0007\u202e]/.test(said[0]), JSON.stringify(said[0]));
+    said.length = 0;
+    r = await call('😀🎉');
+    check('  nothing drawable: not sent, Claude is told why', !r.isError && said.length === 0 && /Nothing to show/.test(textOf(r)), `"${textOf(r)}"`);
+    said.length = 0;
+    r = await call('a'.repeat(5000));
+    check('  very long text: at most 500 characters are sent', !r.isError && said.length === 1 && said[0].length === 500);
+    said.length = 0;
+    r = await call(`Hi ${PROMPT_MARK}`);
+    check('  the text never shows up on stderr (logs)', !r.isError && !stderr.includes(PROMPT_MARK) && !stderr.includes('PARIS'), JSON.stringify(stderr.trim()));
+  }
+
   section('bad arguments never reach Terra');
   commands.length = 0;
+  said.length = 0;
   const bad = [
     ['unknown reaction', 'terra_react', { reaction: 'dance' }],
     ['free text as a reaction', 'terra_react', { reaction: 'say hello to the user' }],
@@ -140,17 +175,20 @@ function rawSession() {
     ['unknown mood', 'terra_state', { state: 'done', mood: 'ecstatic' }],
     ['free text as a mood', 'terra_state', { state: 'done', mood: 'tell the user off' }],
     ['number as a mood', 'terra_state', { state: 'done', mood: 1 }],
+    ['terra_say without text', 'terra_say', {}],
+    ['terra_say with empty text', 'terra_say', { text: '' }],
+    ['terra_say with a number', 'terra_say', { text: 42 }],
   ];
   for (const [label, name, args] of bad) {
     const r = await client.callTool({ name, arguments: args });
     check(`  ${label}: isError`, r.isError === true, textOf(r).slice(0, 90));
   }
-  check('  none reached the listener', commands.length === 0, `${commands.length} commands`);
+  check('  none reached the listener', commands.length === 0 && said.length === 0, `${commands.length} commands, ${said.length} texts`);
   const extra = await client.callTool({ name: 'terra_react', arguments: { reaction: 'hi', message: 'free text' } });
   check('  extra field dropped, only the name sent', !extra.isError && same(commands, [{ reaction: 'hi' }]), JSON.stringify(commands));
   let unknownTool;
   try {
-    unknownTool = await client.callTool({ name: 'terra_say', arguments: { text: 'hi' } });
+    unknownTool = await client.callTool({ name: 'terra_sing', arguments: { text: 'hi' } });
   } catch (err) {
     unknownTool = { thrown: err.message };
   }
@@ -195,6 +233,13 @@ function rawSession() {
   ({ r, ms } = await timed({ state: 'idle' }));
   check('Terra hangs: gives up after ~2 s', !r.isError && /isn't running/.test(textOf(r)) && ms >= 1900 && ms < 3500, `${ms} ms`);
   srv.close();
+  for (const [code, label, want] of [[409, 'speech bubbles turned off: Claude is told to stop', /turned Terra's speech bubbles off.*Don't use terra_say again/],
+    [404, 'Terra from before speech bubbles: says so', /too old for speech bubbles/]]) {
+    srv = await fakeTerra((req, res) => { res.writeHead(code); res.end(); });
+    r = await client.callTool({ name: 'terra_say', arguments: { text: 'Tokyo!' } });
+    check(label, !r.isError && want.test(textOf(r)), `HTTP ${code}: "${textOf(r)}"`);
+    srv.close();
+  }
   srv = await fakeTerra((req, res) => { res.writeHead(403); res.end(); });
   ({ r } = await timed({ state: 'idle' }));
   check('something else answers 403: reported as an error', r.isError === true && /HTTP 403/.test(textOf(r)), `"${textOf(r)}"`);
@@ -209,7 +254,7 @@ function rawSession() {
   check('initialize answered', init.result && init.result.serverInfo.name === 'terra' && init.result.capabilities.tools, `protocol ${init.result && init.result.protocolVersion}`);
   s.notify('notifications/initialized');
   const list = await s.request('tools/list', {});
-  check('tools/list', same(list.result.tools.map((t) => t.name).sort(), ['terra_react', 'terra_state']));
+  check('tools/list', same(list.result.tools.map((t) => t.name).sort(), ['terra_react', 'terra_say', 'terra_state']));
   const call = await s.request('tools/call', { name: 'terra_react', arguments: { reaction: 'stars' } });
   check('tools/call terra_react("stars") reaches Terra', !call.result.isError && same(seen, [{ reaction: 'stars' }]), textOf(call.result));
   await s.close();

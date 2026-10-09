@@ -37,13 +37,15 @@ section('preferences file');
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'terra-prefs-'));
   const file = path.join(dir, 'preferences.json');
-  check('no file: defaults', JSON.stringify(v.loadPrefs(file)) === JSON.stringify({ showWhen: 'claude', loginItemDefaultDone: false }));
-  v.savePrefs(file, { showWhen: 'always', loginItemDefaultDone: true });
-  check('saved and read back', JSON.stringify(v.loadPrefs(file)) === JSON.stringify({ showWhen: 'always', loginItemDefaultDone: true }), fs.readFileSync(file, 'utf8').replace(/\s+/g, ' '));
+  check('no file: defaults (speech bubbles on)', JSON.stringify(v.loadPrefs(file)) === JSON.stringify({ showWhen: 'claude', loginItemDefaultDone: false, speechBubbles: true }));
+  v.savePrefs(file, { showWhen: 'always', loginItemDefaultDone: true, speechBubbles: false });
+  check('saved and read back', JSON.stringify(v.loadPrefs(file)) === JSON.stringify({ showWhen: 'always', loginItemDefaultDone: true, speechBubbles: false }), fs.readFileSync(file, 'utf8').replace(/\s+/g, ' '));
+  fs.writeFileSync(file, JSON.stringify({ showWhen: 'always' }));
+  check('a file from before speech bubbles: they are on', v.loadPrefs(file).speechBubbles === true);
   fs.writeFileSync(file, JSON.stringify({ showWhen: 'sometimes' }));
   check('unknown mode: default', v.loadPrefs(file).showWhen === 'claude');
   fs.writeFileSync(file, '{ damaged');
-  check('damaged file: defaults', v.loadPrefs(file).showWhen === 'claude' && v.loadPrefs(file).loginItemDefaultDone === false);
+  check('damaged file: defaults', v.loadPrefs(file).showWhen === 'claude' && v.loadPrefs(file).loginItemDefaultDone === false && v.loadPrefs(file).speechBubbles === true);
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

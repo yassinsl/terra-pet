@@ -23,7 +23,8 @@ desktop app is open: it waves hi when Claude opens and tucks itself away when Cl
   it remembers the spot (and goes back to the corner if that screen is gone).
 - Menu bar icon: **Play animation** and **Play reaction** to try everything, **Back to idle**,
   **Size** (1x, 1.5x, 2x, **Match small (2.25x)**, 3x or 4x), **Show Terra** (see below),
-  **Patrol** (walks on or off), **Start at login**, **Install in Claude desktop** and
+  **Speech bubbles** (on or off), **Patrol** (walks on or off), **Start at login**,
+  **Install in Claude desktop** and
   **Quit**. The top of the menu shows whether Terra is listening and whether the hooks and
   the Claude desktop tools are installed. The icon stays in the menu bar even while Terra
   is hidden.
@@ -135,6 +136,7 @@ Claude two tools. Claude decides when to call them:
 | `terra_state("waiting")` | when it needs your answer or approval | asks, with a question mark |
 | `terra_state("idle")` | when it stops without finishing | stands up and idles |
 | `terra_react("love")`, ... | when the moment has a feeling | plays that [reaction](#reactions), then goes back to what it was doing |
+| `terra_say("Paris is the capital of France!")` | for a short, simple answer or a friendly remark, at most once a reply | shows it in a speech bubble and talks (see below) |
 
 `terra_react` takes any of the eight reactions: `hi`, `love`, `angry`, `sad`, `idea`,
 `stars`, `talk` or `ask`.
@@ -237,6 +239,17 @@ const REACTIONS = [
 Add words, add rows, or reorder them. `reaction` must be one of the eight names above.
 Restart Terra to pick up the change.
 
+### Speech bubbles
+
+`terra_say` shows a short line in a pixel-art speech bubble above-left of Terra's head (on
+its right when the left side would go off screen), and Terra talks while it shows. The
+bubble pops in, stays 4 seconds plus 50 ms a character (10 s at most) and fades out; a click
+on it dismisses it, and a new one replaces it. It fits 2 lines of about 20 characters, in
+capital letters, A-Z, 0-9 and `. , ! ? : ' - + ( ) /`; longer text ends with `...` and other
+characters are left out. Claude is told to use it only for short answers and friendly
+remarks, never for code, lists, long explanations or anything sensitive. Turn it off with
+**Speech bubbles** in the menu.
+
 ## Make your own skin or animation
 
 All the art is in [`Bot/`](Bot):
@@ -247,6 +260,9 @@ All the art is in [`Bot/`](Bot):
 - **`Bot/reactions/emotes-only/<name>-<n>.png`**: the emotes, numbered from 1. Each is a
   64x80 transparent canvas holding only the emote; the pet's 48x52 cell sits at x=8, y=28
   on that canvas, so an emote is drawn in the space above and around it.
+- **`Bot/bubble/`**: the speech bubble (a 9-slice body, tails, pop-in frames and a 5x7
+  pixel font), copied from [`design/terra-bubble-assets/`](design/terra-bubble-assets),
+  which also has the reference pictures and the finished bubbles the tests compare against.
 
 To add an animation, give it a free row on the sheet and add a line to
 [`renderer/animations.js`](renderer/animations.js):
@@ -284,9 +300,12 @@ in `reactions.js`.
 Terra runs entirely on your Mac. It has no network code apart from its listener, which
 only accepts connections from your own Mac (`127.0.0.1`), where the hook sends its events. When you send a prompt, the hook passes its text to Terra,
 which checks it for trigger words in memory and then drops it: prompt text is never written
-to disk, logged, or sent anywhere else. The Claude desktop tools send Terra nothing but one
-name from a fixed list (`love`, `working`, ...); the listener refuses anything else, so no
-conversation text reaches Terra that way. Terra stores only its position, size and Show Terra choice.
+to disk, logged, or sent anywhere else. The Claude desktop tools send Terra names from a
+fixed list (`love`, `working`, ...), and `terra_say` the short text of a speech bubble
+(500 characters at most, letters and a few signs only). Bubble text is treated like prompt
+text: kept in memory while the bubble shows, never written to disk or logged, and only
+ever drawn as pixel letters, never as a web page. Terra stores only its position, size,
+Show Terra choice and whether speech bubbles are on.
 
 ## Development
 
@@ -324,6 +343,8 @@ notarized, which is why macOS asks you to confirm the first time you open it.
 - `window-state.js`: size, position and remembering them
 - `visibility.js`: when Terra is shown (Show Terra) and the preferences file
 - `claude-app.js`: whether the Claude desktop app is running
+- `bubble-layout.js`: the speech bubble's text, shape, timing and place beside the pet
+- `bubble-window.js`, `bubble-preload.js`: its window (`renderer/bubble.html` draws it)
 - `renderer/`: the page that draws Terra: the state machine, animations and emotes
 - `assets/`: the app and menu bar icons
 - `test/`: unit and end-to-end tests (`test/run.js` runs them all)

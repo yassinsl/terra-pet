@@ -1,7 +1,8 @@
-// Terra's MCP server for the Claude desktop app (stdio). Two tools, terra_react and
-// terra_state, each passing one name from pet-commands.js to the running pet through
-// its local listener: POST http://127.0.0.1:<port>/mcp, port read from ~/.terra-pet/port
-// on every call, so it doesn't matter whether Terra or Claude starts first.
+// Terra's MCP server for the Claude desktop app (stdio). Three tools: terra_react and
+// terra_state pass names from pet-commands.js to the running pet through its local
+// listener (POST http://127.0.0.1:<port>/mcp), and terra_say a speech bubble's short text
+// (POST /say; only what the bubble font can draw, never logged). The port is read from
+// ~/.terra-pet/port on every call, so it doesn't matter whether Terra or Claude starts first.
 //
 // Claude desktop runs it with Terra's own binary in Node mode (see mcp-installer.js):
 //   ELECTRON_RUN_AS_NODE=1 <Terra or Electron binary> <this file>
@@ -18,6 +19,7 @@ const { McpServer } = require('@modelcontextprotocol/server');
 const { serveStdio } = require('@modelcontextprotocol/server/stdio');
 const { z } = require('zod');
 const { REACTIONS, STATES, MOODS } = require('../pet-commands.js');
+const { MAX_INPUT, cleanText, layoutBubble } = require('../bubble-layout.js');
 const { version } = require('../package.json');
 const launcher = require('./pet-launcher.js');
 const openWithClaude = require('../open-with-claude.js');
@@ -33,8 +35,11 @@ terra_react now and then to show how the conversation feels. Always give "done" 
 matches how the conversation went, so Terra ends the right way: happy when it went well or
 the user was kind (they thanked you), sad for bad news or a failure, angry when the user
 insulted you or is fed up, neutral for an ordinary answer (most replies). For example:
-thanks -> happy, an insult -> angry, bad news -> sad, a normal answer -> neutral. There is
-no need to mention the tools or their results to the user unless they ask about Terra.`;
+thanks -> happy, an insult -> angry, bad news -> sad, a normal answer -> neutral. Use
+terra_say for short, simple answers and friendly remarks, for example "Paris is the capital
+of France!" or "Happy to help!", at most once per reply; never for code, lists, long
+explanations or anything sensitive. There is no need to mention the tools or their results
+to the user unless they ask about Terra.`;
 
 const REACT_DESCRIPTION = `Play a short reaction on Terra, the user's desktop pet (a small pixel-art robot on their screen). Purely cosmetic: the user just sees the pet react.
 Use it when a moment clearly has a feeling, at most once or twice per reply:
@@ -61,6 +66,11 @@ The mood (only with done) is how the conversation went:
 Examples: thanks -> happy, an insult -> angry, bad news -> sad, a normal answer -> neutral.
 For example: terra_state("working") before a long answer and terra_state("done", mood "neutral") after it. Skip it for short, quick replies. Terra gives up on working or waiting by itself after 10 minutes.`;
 
+const SAY_DESCRIPTION = `Show a short line of text in a speech bubble next to Terra, the user's desktop pet, while it talks. The user sees it on their screen for a few seconds.
+Use it for short, simple answers and friendly remarks, for example "Paris is the capital of France!" or "Happy to help!". At most once per reply.
+Do not use it for code, lists, long explanations or anything sensitive (passwords, personal or private details).
+It fits 2 lines of about 20 characters each; longer text is cut with "...". Terra writes in capital letters and has only A-Z, 0-9, spaces and . , ! ? : ' - + ( ) /; anything else is left out.`;
+
 const STATE_DONE = {
   working: 'Terra is working at its computer. Call terra_state("done") with a mood when you finish.',
   waiting: 'Terra is waiting for the user.',
@@ -75,7 +85,7 @@ const DONE_MOOD = {
 };
 
 // Resolves to { status } from the listener, or { down: true } when nothing answers.
-function post(body) {
+function post(body, route = '/mcp') {
   let port;
   try {
     port = Number(fs.readFileSync(portFile(), 'utf8').trim());
@@ -88,7 +98,7 @@ function post(body) {
     const req = http.request({
       host: HOST,
       port,
-      path: '/mcp',
+      path: route,
       method: 'POST',
       agent: false,
       timeout: TIMEOUT,
@@ -106,6 +116,8 @@ function post(body) {
 
 const text = (message, isError = false) => ({ content: [{ type: 'text', text: message }], ...(isError ? { isError } : {}) });
 
+const DOWN = "Terra (the desktop pet) isn't running, so there was nothing to show. That's fine: carry on, no need to retry.";
+
 async function send(body, okMessage) {
   let { status, down } = await post(body);
   // A Terra from before moods turns "done" with a mood away; it still takes plain "done".
@@ -113,10 +125,24 @@ async function send(body, okMessage) {
     ({ status, down } = await post({ state: body.state }));
     okMessage = 'This copy of Terra is too old for moods, so it ended its own way. No need to retry.';
   }
-  if (down) return text("Terra (the desktop pet) isn't running, so there was nothing to show. That's fine: carry on, no need to retry.");
+  if (down) return text(DOWN);
   if (status === 204) return text(okMessage);
   if (status === 404) return text('This copy of Terra is too old to take commands from Claude desktop, so nothing was shown. No need to retry.');
   return text(`Terra didn't accept the command (HTTP ${status}).`, true);
+}
+
+// terra_say: sends Terra the text the font can draw (nothing else), and tells Claude what
+// will show. The text is never logged.
+async function say(raw) {
+  const layout = layoutBubble(raw);
+  if (!layout) return text("Nothing to show: Terra's font has only A-Z, 0-9 and . , ! ? : ' - + ( ) /. No need to retry.");
+  const { status, down } = await post({ text: cleanText(raw).slice(0, MAX_INPUT) }, '/say');
+  if (down) return text(DOWN);
+  if (status === 409) return text("The user has turned Terra's speech bubbles off, so nothing was shown. Don't use terra_say again in this conversation.");
+  if (status === 404) return text('This copy of Terra is too old for speech bubbles, so nothing was shown. No need to retry.');
+  if (status !== 204) return text(`Terra didn't accept the text (HTTP ${status}).`, true);
+  const shown = layout.lines.join(' / ');
+  return text(`Terra says: "${shown}"${layout.trimmed ? ' (cut to fit: keep it shorter next time)' : ''}.`);
 }
 
 function createServer() {
@@ -140,6 +166,15 @@ function createServer() {
     }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, ({ state, mood }) => (state === 'done' && mood ? send({ state, mood }, DONE_MOOD[mood]) : send({ state }, STATE_DONE[state])));
+
+  server.registerTool('terra_say', {
+    title: 'Terra: say',
+    description: SAY_DESCRIPTION,
+    inputSchema: z.object({
+      text: z.string().min(1).describe('The words to show, as plain text: a short answer or remark, about 40 characters at most.'),
+    }),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, ({ text: words }) => say(words));
 
   return server;
 }

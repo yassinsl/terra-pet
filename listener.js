@@ -1,17 +1,21 @@
-// Local HTTP listener. Bound to 127.0.0.1 only. Three routes:
+// Local HTTP listener. Bound to 127.0.0.1 only. Four routes:
 //   POST /event  { "event": string, "prompt"?: string }  Claude Code hook events (hooks/terra-hook.sh)
 //   POST /mcp    { "reaction": name } or { "state": name }, or { "state": "done", "mood": name }
 //                the Claude desktop app (mcp/terra-mcp.js)
 //   POST /server { "action": "hello"|"bye"|"ping", "id": string }  that MCP server coming and
 //                going (answered with a small JSON status instead of 204)
-// Prompt text is passed to onEvent and never written to disk or logged. /mcp takes
-// nothing but names from the fixed lists in pet-commands.js.
+//   POST /say    { "text": string }  a speech bubble from the same MCP server (terra_say);
+//                answered 204, or 409 when speech bubbles are off, 422 when nothing in
+//                the text can be drawn
+// Prompt text and bubble text are passed on and never written to disk or logged. /mcp
+// takes nothing but names from the fixed lists in pet-commands.js.
 const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { REACTIONS, STATES, MOODS } = require('./pet-commands.js');
 const { SESSION_ID } = require('./open-with-claude.js');
+const { MAX_INPUT: MAX_SAY } = require('./bubble-layout.js');
 
 const HOST = '127.0.0.1';
 const FIRST_PORT = 47800;
@@ -63,8 +67,21 @@ function serverMessage(body) {
   return { value: { action, id } };
 }
 
-function createHandler(onEvent, onPetCommand, onServer) {
-  const routes = { '/event': [hookEvent, onEvent], '/mcp': [petCommand, onPetCommand], '/server': [serverMessage, onServer] };
+// Checks a parsed /say body: the text and nothing else, 1 to MAX_SAY characters.
+function sayMessage(body) {
+  const { text } = body;
+  if (Object.keys(body).length !== 1 || typeof text !== 'string' || !text.length || text.length > MAX_SAY) {
+    return { error: `expected { "text": <1 to ${MAX_SAY} characters> }` };
+  }
+  return { value: { text } };
+}
+
+const SAY_REFUSED = { 409: 'speech bubbles are off', 422: 'nothing in the text can be drawn' };
+
+function createHandler(onEvent, onPetCommand, onServer, onSay) {
+  const routes = {
+    '/event': [hookEvent, onEvent], '/mcp': [petCommand, onPetCommand], '/server': [serverMessage, onServer], '/say': [sayMessage, onSay],
+  };
   return (req, res) => {
     const { port } = req.socket.address();
     const { pathname } = new URL(req.url, `http://${HOST}`);
@@ -104,6 +121,7 @@ function createHandler(onEvent, onPetCommand, onServer) {
       const { value, error } = validate(body);
       if (error) return reply(res, 400, error);
       const answer = handle(value);
+      if (Object.hasOwn(SAY_REFUSED, answer)) return reply(res, answer, SAY_REFUSED[answer]);
       if (answer && typeof answer === 'object') {
         res.writeHead(200, { 'Content-Type': 'application/json', Connection: 'close' });
         res.end(JSON.stringify(answer));
@@ -125,9 +143,9 @@ function listen(server, port) {
 }
 
 // Starts on the first free port from 47800 and writes it to ~/.terra-pet/port.
-async function startListener(onEvent, onPetCommand = () => {}, onServer = () => ({})) {
+async function startListener(onEvent, onPetCommand = () => {}, onServer = () => ({}), onSay = () => 409) {
   for (let port = FIRST_PORT; port < FIRST_PORT + PORT_TRIES; port++) {
-    const server = http.createServer(createHandler(onEvent, onPetCommand, onServer));
+    const server = http.createServer(createHandler(onEvent, onPetCommand, onServer, onSay));
     server.requestTimeout = 5000;
     server.headersTimeout = 5000;
     try {

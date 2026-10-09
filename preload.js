@@ -12,4 +12,6 @@ contextBridge.exposeInMainWorld('terra', {
   onSetScale: (callback) => ipcRenderer.on('pet:set-scale', (_event, scale) => callback(scale)),
   onVisibility: (callback) => ipcRenderer.on('pet:visibility', (_event, change) => callback(change)),
   readyToHide: () => ipcRenderer.send('pet:ready-to-hide'),
+  showBubble: (id) => ipcRenderer.send('pet:show-bubble', id),
+  onBubbleEnded: (callback) => ipcRenderer.on('pet:bubble-ended', (_event, id) => callback(id)),
 });

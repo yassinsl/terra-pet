@@ -19,7 +19,8 @@ function shouldShow({ mode, claudeRunning, lastCodeEventAt, now }) {
 }
 
 // showWhen: one of MODES. loginItemDefaultDone: the packaged app has turned "Start at
-// login" on once already, so it won't again after you turn it off.
+// login" on once already, so it won't again after you turn it off. speechBubbles: the
+// Speech bubbles checkbox.
 function loadPrefs(file) {
   let saved = {};
   try {
@@ -30,6 +31,7 @@ function loadPrefs(file) {
   return {
     showWhen: MODES.some((m) => m.id === saved.showWhen) ? saved.showWhen : DEFAULT_MODE,
     loginItemDefaultDone: saved.loginItemDefaultDone === true,
+    speechBubbles: saved.speechBubbles !== false, // the Speech bubbles checkbox, on unless turned off
   };
 }
 

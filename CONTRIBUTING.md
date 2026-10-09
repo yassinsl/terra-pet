@@ -28,8 +28,11 @@ Terra is plain JavaScript with no framework and no bundler. The README's
   by hand, do the same: `HOME=/tmp/terra-dev TERRA_USER_DATA=/tmp/terra-dev/data npm start`
   (a separate `HOME` keeps its port file apart, `TERRA_USER_DATA` its saved settings).
   The same goes for the Claude desktop config: pass `--config <temp file>`.
-- The Claude desktop tools send Terra only names from `pet-commands.js`. Keep it that way:
-  no free text from the MCP server to the listener.
+- The Claude desktop tools send Terra only names from `pet-commands.js`, except
+  `terra_say`'s bubble text, which has its own route (`/say`: 500 characters at most, only
+  characters the bubble font has). Treat that text like prompt text: never log it, never
+  write it to disk, and only ever draw it as glyphs, never as HTML. Keep everything else
+  to fixed names.
 
 ## Art
 

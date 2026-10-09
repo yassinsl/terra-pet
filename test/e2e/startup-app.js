@@ -31,7 +31,10 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 // What Electron runs when the native menu reports a click on an item.
 const nativeClick = (menu, label) => menu._executeCommand({}, menu.items.find((i) => i.label === label).commandId);
 
+let petWindow = null; // the first window; the speech bubble's comes after it
 app.on('browser-window-created', (_e, win) => {
+  if (petWindow) return;
+  petWindow = win;
   win.webContents.once('did-finish-load', async () => {
     // canvas: its size on screen (CSS pixels, the window's points); backing: its own pixels.
     await wait(300); // past ready-to-show, which decides whether the window is shown

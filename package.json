@@ -43,12 +43,16 @@
       "window-state.js",
       "visibility.js",
       "claude-app.js",
+      "bubble-layout.js",
+      "bubble-window.js",
+      "bubble-preload.js",
       "renderer/**",
       "hooks/terra-hook.sh",
       "assets/trayTemplate.png",
       "assets/trayTemplate@2x.png",
       "Bot/spritesheet-x1.png",
-      "Bot/reactions/emotes-only/*.png"
+      "Bot/reactions/emotes-only/*.png",
+      "Bot/bubble/*"
     ],
     "mac": {
       "target": [
