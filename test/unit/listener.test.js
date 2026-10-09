@@ -79,6 +79,13 @@ function curl(args, body) {
       `HTTP ${code}, onEvent got ${JSON.stringify(events[0])?.replace(PROMPT_MARK, '<mark>')}`);
   }
 
+  {
+    events.length = 0;
+    const body = { event: 'stop', reply: `All done! ${PROMPT_MARK}` };
+    const code = await post(body);
+    check('  stop with Claude\'s reply (for the bubble)', code === '204' && JSON.stringify(events[0]) === JSON.stringify(body), `HTTP ${code}`);
+  }
+
   section('rejected requests (onEvent must not be called)');
   events.length = 0;
   const big = JSON.stringify({ event: 'tool', prompt: 'x'.repeat(70 * 1024) });
@@ -91,6 +98,8 @@ function curl(args, body) {
     ['unknown event', () => post({ event: 'explode' }), '400'],
     ['event missing', () => post({ prompt: 'hi' }), '400'],
     ['prompt not a string', () => post({ event: 'prompt', prompt: 42 }), '400'],
+    ['reply not a string', () => post({ event: 'stop', reply: ['hi'] }), '400'],
+    ['reply on another event', () => post({ event: 'prompt', reply: 'hi' }), '400'],
     ['no Content-Type (form post)', () => curl(['--data-binary', '{"event":"tool"}', url()]), '415'],
     ['GET /event', () => curl([url()]), '405'],
     ['POST /other', () => curl(['-H', 'Content-Type: application/json', '--data-binary', '{"event":"tool"}', url('/other')]), '404'],
@@ -122,6 +131,12 @@ function curl(args, body) {
     check(`  "done" with every mood (${MOODS.length})`, codes.every((c) => c === '204') && JSON.stringify(commands) === JSON.stringify(MOODS.map((mood) => ({ state: 'done', mood }))),
       `HTTP ${[...new Set(codes)].join(', ')}; ${MOODS.join(', ')}`);
   }
+  {
+    commands.length = 0;
+    const codes = [await postMcp({ state: 'done', say: `TOKYO! ${PROMPT_MARK}` }), await postMcp({ state: 'done', mood: 'happy', say: 'HAPPY TO HELP!' })];
+    check('  "done" with its bubble line, with and without a mood', codes.every((c) => c === '204')
+      && JSON.stringify(commands) === JSON.stringify([{ state: 'done', say: `TOKYO! ${PROMPT_MARK}` }, { state: 'done', mood: 'happy', say: 'HAPPY TO HELP!' }]), `HTTP ${codes.join(', ')}`);
+  }
 
   section('/mcp: rejected requests (handler must not be called)');
   commands.length = 0;
@@ -141,6 +156,12 @@ function curl(args, body) {
     ['a mood on its own', { mood: 'happy' }, '400'],
     ['a mood with a reaction', { reaction: 'hi', mood: 'happy' }, '400'],
     ['done, mood and an extra field', { state: 'done', mood: 'happy', message: 'hello' }, '400'],
+    ['say with "working"', { state: 'working', say: 'hi' }, '400'],
+    ['say on its own', { say: 'hi' }, '400'],
+    ['say with a reaction', { reaction: 'hi', say: 'hi' }, '400'],
+    ['empty say', { state: 'done', say: '' }, '400'],
+    ['say over 500 characters', { state: 'done', say: 'x'.repeat(501) }, '400'],
+    ['say not a string', { state: 'done', mood: 'happy', say: 42 }, '400'],
     ['extra free-text field', { reaction: 'hi', message: 'hello' }, '400'],
     ['empty object', {}, '400'],
     ['name not a string', { state: ['done'] }, '400'],

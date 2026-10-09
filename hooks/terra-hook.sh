@@ -6,13 +6,15 @@
 # Without an argument the event is worked out from hook_event_name in the JSON.
 # It must never slow Claude Code down: it prints nothing (stdout from some hooks is
 # added to Claude's context), gives up after 1 second, always exits 0, and does
-# nothing when the pet isn't running. Prompt text only travels through pipes, never
-# argv or files, so it doesn't show up in `ps` or on disk.
+# nothing when the pet isn't running. Prompt text, and Claude's reply on stop (for the
+# speech bubble), only travel through pipes, never argv or files, so they don't show up
+# in `ps` or on disk.
 
 exec >/dev/null 2>&1
 
 PORT_FILE="$HOME/.terra-pet/port"
 MAX_PROMPT=10000 # characters; a longer prompt is sent without its text
+MAX_REPLY=4000   # characters of Claude's reply sent on stop; the bubble shows its first sentence
 
 input=$(cat)
 event=$1
@@ -46,6 +48,13 @@ if [ "$event" = prompt ] && command -v jq >/dev/null; then
     (.prompt // "" | gsub("<pasted_content id=\"[^\"]*\">[\\s\\S]*?</pasted_content id=\"[^\"]*\">"; " ")) as $p
     | {event: $event} + (if ($p | length) <= $max then {prompt: $p} else {} end)') ||
     body="{\"event\":\"$event\"}"
+fi
+if [ "$event" = stop ] && command -v jq >/dev/null; then
+  # last_assistant_message: the text of Claude's final response (Stop hook input).
+  body=$(printf '%s' "$input" | jq -c --argjson max "$MAX_REPLY" '
+    {event: "stop"} + (if (.last_assistant_message | type) == "string" and (.last_assistant_message | length) > 0
+      then {reply: .last_assistant_message[0:$max]} else {} end)') ||
+    body='{"event":"stop"}'
 fi
 
 printf '%s' "$body" | curl -q --silent --output /dev/null --noproxy '*' --max-time 1 \

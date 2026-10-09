@@ -115,7 +115,7 @@ The hook never slows Claude Code down: Claude Code doesn't wait for it, it gives
 | gets your prompt | reacts if the prompt has a trigger word, then sits down to work |
 | uses a tool | sits down to work, unless it already is |
 | needs you (permission, waiting for input) | asks, with a question mark |
-| finishes | is happy, with stars |
+| finishes | is happy, with stars, and shows the first sentence of Claude's reply in its [speech bubble](#speech-bubbles) |
 | stops on an API error (rate limit, overload...) | gets dizzy |
 | starts a session | waves |
 
@@ -132,7 +132,7 @@ Claude two tools. Claude decides when to call them:
 | Claude calls... | When | Terra |
 | :- | :- | :- |
 | `terra_state("working")` | before a long answer or a multi-step task | sits down to work |
-| `terra_state("done", mood)` | when it has finished, with how it went | shows the mood, then idles (see below) |
+| `terra_state("done", mood, say)` | when it has finished, with how it went and a short line | shows the mood with the line in its [speech bubble](#speech-bubbles), then idles (see below) |
 | `terra_state("waiting")` | when it needs your answer or approval | asks, with a question mark |
 | `terra_state("idle")` | when it stops without finishing | stands up and idles |
 | `terra_react("love")`, ... | when the moment has a feeling | plays that [reaction](#reactions), then goes back to what it was doing |
@@ -241,14 +241,26 @@ Restart Terra to pick up the change.
 
 ### Speech bubbles
 
-`terra_say` shows a short line in a pixel-art speech bubble above-left of Terra's head (on
-its right when the left side would go off screen), and Terra talks while it shows. The
+Terra answers in a pixel-art speech bubble above-left of its head (on its right when the
+left side would go off screen):
+
+- **Claude desktop**: `terra_state("done")` must come with `say`, one short line: the answer
+  itself for a short answer ("Tokyo!"), a short summary for a long one ("Facebook: Meta's
+  social network!"), something friendly for thanks ("Happy to help!"). Without it the tool
+  refuses and tells Claude to send it again. The bubble shows while Terra plays the mood.
+  `terra_say` adds an extra line during a reply, and Terra talks while it shows; when
+  `done` repeats a line `terra_say` already showed in that reply, it isn't shown twice.
+- **Claude Code**: when Claude finishes, the hook passes Claude's reply on (the Stop hook's
+  `last_assistant_message`), and the bubble shows its first sentence, skipping code blocks,
+  while Terra celebrates as before.
+
+The
 bubble pops in, stays 4 seconds plus 50 ms a character (10 s at most) and fades out; a click
 on it dismisses it, and a new one replaces it. It fits 2 lines of about 20 characters, in
 capital letters, A-Z, 0-9 and `. , ! ? : ' - + ( ) /`; longer text ends with `...` and other
 characters are left out. Claude is told to use it only for short answers and friendly
-remarks, never for code, lists, long explanations or anything sensitive. Turn it off with
-**Speech bubbles** in the menu.
+remarks, never for code, lists, long explanations or anything sensitive. **Speech bubbles**
+in the menu turns all of this off.
 
 ## Make your own skin or animation
 
@@ -301,10 +313,12 @@ Terra runs entirely on your Mac. It has no network code apart from its listener,
 only accepts connections from your own Mac (`127.0.0.1`), where the hook sends its events. When you send a prompt, the hook passes its text to Terra,
 which checks it for trigger words in memory and then drops it: prompt text is never written
 to disk, logged, or sent anywhere else. The Claude desktop tools send Terra names from a
-fixed list (`love`, `working`, ...), and `terra_say` the short text of a speech bubble
-(500 characters at most, letters and a few signs only). Bubble text is treated like prompt
-text: kept in memory while the bubble shows, never written to disk or logged, and only
-ever drawn as pixel letters, never as a web page. Terra stores only its position, size,
+fixed list (`love`, `working`, ...), and the short text of a speech bubble (`terra_say`,
+and `say` with `done`: 500 characters at most, letters and a few signs only). When Claude
+Code finishes, the hook passes the first 4,000 characters of Claude's reply through a pipe,
+and Terra keeps only its first sentence for the bubble. All of this text is treated like
+prompt text: kept in memory while the bubble shows, never written to disk or logged, and
+only ever drawn as pixel letters, never as a web page. Terra stores only its position, size,
 Show Terra choice and whether speech bubbles are on.
 
 ## Development

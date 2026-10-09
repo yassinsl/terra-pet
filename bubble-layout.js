@@ -47,6 +47,27 @@ function cleanText(raw) {
     .trim();
 }
 
+// The first sentence of a reply from Claude (the Claude Code Stop hook's
+// last_assistant_message), for the bubble: code blocks, headings and table rows are
+// skipped, inline code and links keep only their words, markdown marks go, and it ends at
+// the first . ! or ? that ends a sentence, or at the end of the first line with words on
+// it. The bubble then trims it to 2 lines.
+function firstSentence(reply) {
+  if (typeof reply !== 'string') return '';
+  const text = reply
+    .replace(/(^|\n)[ \t]*(```|~~~)[\s\S]*?(\n[ \t]*\2[^\n]*(?=\n|$)|$)/g, '$1') // fenced blocks, closed or not
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1') // [words](link) -> words
+    .replace(/`([^`\n]*)`/g, '$1');
+  for (const raw of text.split('\n')) {
+    if (/^\s*(#|\|)/.test(raw)) continue;
+    const line = raw.replace(/^\s*(>|[-*+]|\d+[.)])\s+/, '').replace(/[*_]{1,3}([^*_]+)[*_]{1,3}/g, '$1').trim();
+    if (!/[\p{L}\p{N}]/u.test(line)) continue;
+    const end = line.search(/[.!?](\s|$)/);
+    return end >= 0 ? line.slice(0, end + 1) : line;
+  }
+  return '';
+}
+
 // Word wrap into lines of LINE_CHARS characters at most (a longer word is cut). Text that
 // needs more than MAX_LINES lines ends the last one with "...".
 function wrapLines(clean) {
@@ -130,5 +151,5 @@ function placeBubble(layout, petBounds, scale, workArea) {
 }
 
 module.exports = {
-  FONT, MAX_INPUT, MAX_LINES, LINE_CHARS, TAIL_HEIGHT, TIMING, holdFor, cleanText, wrapLines, layoutBubble, parts, placeBubble,
+  FONT, MAX_INPUT, MAX_LINES, LINE_CHARS, TAIL_HEIGHT, TIMING, holdFor, cleanText, firstSentence, wrapLines, layoutBubble, parts, placeBubble,
 };

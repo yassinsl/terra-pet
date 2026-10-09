@@ -89,6 +89,8 @@ function rawSession() {
   check('server name and version', info.name === 'terra' && info.version === require(path.join(ROOT, 'package.json')).version, JSON.stringify(info));
   const instructions = client.getInstructions() || '';
   check('server instructions mention both tools', /terra_state/.test(instructions) && /terra_react/.test(instructions));
+  check('  and that done always takes a say line: the answer, a summary or something friendly', /"done"\s+also always needs "say"/.test(instructions)
+    && ['"Tokyo!"', '"42!"', '"Facebook: Meta\'s social network!"', '"Happy to help!"', 'never code or private details'].every((e) => instructions.replace(/\s+/g, ' ').includes(e)));
   check('  and say done always takes a mood, with the examples', /Always give "done" a mood/.test(instructions)
     && ['thanks -> happy', 'an insult -> angry', 'bad news -> sad', 'a normal answer -> neutral'].every((e) => instructions.replace(/\s+/g, ' ').includes(e)));
   const { tools } = await client.listTools();
@@ -98,10 +100,12 @@ function rawSession() {
   const state = byName.terra_state;
   check('terra_react: one required enum of the 8 reactions', same(react.inputSchema.required, ['reaction']) && same(react.inputSchema.properties.reaction.enum, REACTIONS) && Object.keys(react.inputSchema.properties).length === 1,
     react.inputSchema.properties.reaction.enum.join(' '));
-  check('terra_state: a required enum of the 4 states, an optional one of the 4 moods', same(state.inputSchema.required, ['state']) && same(state.inputSchema.properties.state.enum, STATES)
-    && same(state.inputSchema.properties.mood.enum, MOODS) && Object.keys(state.inputSchema.properties).length === 2,
+  check('terra_state: a required enum of the 4 states, an optional one of the 4 moods, say text', same(state.inputSchema.required, ['state']) && same(state.inputSchema.properties.state.enum, STATES)
+    && same(state.inputSchema.properties.mood.enum, MOODS) && state.inputSchema.properties.say.type === 'string' && Object.keys(state.inputSchema.properties).length === 3,
     `${state.inputSchema.properties.state.enum.join(' ')}; mood ${state.inputSchema.properties.mood.enum.join(' ')}`);
-  check('descriptions say when to use them', REACTIONS.every((r) => react.description.includes(`- ${r}:`)) && /terra_state\("working"\) before a long answer and terra_state\("done", mood "neutral"\) after it/.test(state.description),
+  check('  say described for the model, required with done', /Required with done/.test(state.inputSchema.properties.say.description)
+    && ['"Tokyo!"', '"42!"', '"Facebook: Meta\'s social network!"', '"Happy to help!"', 'Never code or private details'].every((e) => state.inputSchema.properties.say.description.includes(e)));
+  check('descriptions say when to use them', REACTIONS.every((r) => react.description.includes(`- ${r}:`)) && /terra_state\("working"\) before a long answer and terra_state\("done", mood "neutral", say "Tokyo!"\) after it/.test(state.description),
     `${react.description.length} + ${state.description.length} chars`);
   check('  terra_state: done always with a mood, what each is for, the examples', /done: .*always with a mood/.test(state.description) && MOODS.every((m) => state.description.includes(`- ${m}:`))
     && state.description.includes('Examples: thanks -> happy, an insult -> angry, bad news -> sad, a normal answer -> neutral.'));
@@ -112,22 +116,38 @@ function rawSession() {
   for (const [tool, key, names] of [['terra_react', 'reaction', REACTIONS], ['terra_state', 'state', STATES]]) {
     commands.length = 0;
     const results = [];
-    for (const name of names) results.push(await client.callTool({ name: tool, arguments: { [key]: name } }));
-    const ok = results.every((r) => !r.isError && textOf(r)) && same(commands, names.map((n) => ({ [key]: n })));
+    const withSay = (n) => (n === 'done' ? { say: 'Tokyo!' } : {});
+    for (const name of names) results.push(await client.callTool({ name: tool, arguments: { [key]: name, ...withSay(name) } }));
+    const ok = results.every((r) => !r.isError && textOf(r)) && same(commands, names.map((n) => ({ [key]: n, ...(n === 'done' ? { say: 'TOKYO!' } : {}) })));
     check(`  ${tool}: all ${names.length}`, ok, ok ? `e.g. "${textOf(results[0])}"` : JSON.stringify({ results, commands }));
   }
 
   {
     commands.length = 0;
     const results = [];
-    for (const mood of MOODS) results.push(await client.callTool({ name: 'terra_state', arguments: { state: 'done', mood } }));
-    const ok = results.every((r) => !r.isError && textOf(r)) && same(commands, MOODS.map((mood) => ({ state: 'done', mood })));
+    for (const mood of MOODS) results.push(await client.callTool({ name: 'terra_state', arguments: { state: 'done', mood, say: 'Happy to help!' } }));
+    const ok = results.every((r) => !r.isError && textOf(r)) && same(commands, MOODS.map((mood) => ({ state: 'done', mood, say: 'HAPPY TO HELP!' })))
+      && results.every((r) => textOf(r).endsWith('Its bubble says: "HAPPY TO HELP!".'));
     check(`  terra_state: done with each mood (${MOODS.length})`, ok, ok ? results.map((r) => `"${textOf(r)}"`).join(' ') : JSON.stringify({ results, commands }));
   }
   {
     commands.length = 0;
-    const plain = await client.callTool({ name: 'terra_state', arguments: { state: 'done' } });
-    check('  done without a mood: sent as is, the answer asks for one next time', !plain.isError && same(commands, [{ state: 'done' }]) && /Next time give done a mood/.test(textOf(plain)), `"${textOf(plain)}"`);
+    const plain = await client.callTool({ name: 'terra_state', arguments: { state: 'done', say: 'Tokyo!' } });
+    check('  done without a mood: sent with its line, the answer asks for a mood next time', !plain.isError && same(commands, [{ state: 'done', say: 'TOKYO!' }]) && /Next time give done a mood/.test(textOf(plain)), `"${textOf(plain)}"`);
+    commands.length = 0;
+    const errors = [];
+    for (const args of [{ state: 'done' }, { state: 'done', mood: 'happy' }, { state: 'done', mood: 'happy', say: '   ' }]) {
+      const r = await client.callTool({ name: 'terra_state', arguments: args });
+      errors.push({ isError: r.isError, text: textOf(r) });
+    }
+    check('  done without say: rejected, told to resend done with a short answer or summary', errors.every((e) => e.isError === true && /say: done needs "say": resend terra_state with state "done", your mood and say, a short answer or summary/.test(e.text)) && commands.length === 0,
+      `"${errors[0].text}"`);
+    commands.length = 0;
+    const emoji = await client.callTool({ name: 'terra_state', arguments: { state: 'done', mood: 'happy', say: '😀🎉' } });
+    check('  a say with nothing drawable: done still goes, without a bubble', !emoji.isError && same(commands, [{ state: 'done', mood: 'happy' }]), JSON.stringify(commands));
+    commands.length = 0;
+    const longSay = await client.callTool({ name: 'terra_state', arguments: { state: 'done', mood: 'neutral', say: 'Facebook is the social network that Meta runs, with billions of users' } });
+    check('  a long say: cut to fit, and Claude is asked to keep it shorter', !longSay.isError && /keep it shorter next time/.test(textOf(longSay)) && commands.length === 1, `"${textOf(longSay)}"`);
     commands.length = 0;
     const other = await client.callTool({ name: 'terra_state', arguments: { state: 'working', mood: 'happy' } });
     check('  a mood with "working": dropped, only the state sent', !other.isError && same(commands, [{ state: 'working' }]), JSON.stringify(commands));
@@ -141,7 +161,7 @@ function rawSession() {
     check('description: short answers and friendly remarks, with the examples', /short, simple answers and friendly remarks/.test(d) && d.includes('"Paris is the capital of France!"') && d.includes('"Happy to help!"'));
     check('  not for code, lists, long explanations or anything sensitive; once per reply', /Do not use it for code, lists, long explanations or anything sensitive/.test(d) && /At most once per reply/.test(d));
     check('  says what fits: 2 lines of about 20 characters, cut with "..."', /2 lines of about 20 characters each; longer text is cut with "\.\.\."/.test(d));
-    check('server instructions say the same', /terra_say for short, simple answers and friendly remarks/.test(instructions.replace(/\s+/g, ' ')) && /at most once per reply; never for code, lists, long explanations or anything sensitive/.test(instructions.replace(/\s+/g, ' ')));
+    check('server instructions: terra_say only for an extra line, the answer goes in done\'s say', /terra_say is only for an extra line during a reply \(at most once; never for code, lists, long explanations or anything sensitive\); the answer itself goes in done's say/.test(instructions.replace(/\s+/g, ' ')));
     const call = (text) => client.callTool({ name: 'terra_say', arguments: { text } });
     said.length = 0;
     let r = await call('Paris is the capital of France!');
@@ -205,10 +225,10 @@ function rawSession() {
   let { r, ms } = await timed({ state: 'working' });
   check('no port file: friendly message, not an error', !r.isError && /isn't running/.test(textOf(r)) && ms < 1000, `${ms} ms: "${textOf(r)}"`);
   fs.writeFileSync(PORT_FILE, `${listener.port}\n`); // left behind by a Terra that crashed
-  ({ r, ms } = await timed({ state: 'done' }));
+  ({ r, ms } = await timed({ state: 'done', say: 'Tokyo!' }));
   check('stale port file (refused): same message', !r.isError && /isn't running/.test(textOf(r)) && ms < 1000, `${ms} ms`);
   fs.writeFileSync(PORT_FILE, 'garbage\n');
-  ({ r } = await timed({ state: 'done' }));
+  ({ r } = await timed({ state: 'done', say: 'Tokyo!' }));
   check('damaged port file: same message', !r.isError && /isn't running/.test(textOf(r)));
 
   let srv = await fakeTerra((req, res) => { res.writeHead(404); res.end('not found\n'); });
@@ -225,8 +245,8 @@ function rawSession() {
       res.end();
     });
   });
-  ({ r } = await timed({ state: 'done', mood: 'happy' }));
-  check('Terra from before moods: done sent again without one', !r.isError && /too old for moods/.test(textOf(r)) && same(bodies, ['{"state":"done","mood":"happy"}', '{"state":"done"}']),
+  ({ r } = await timed({ state: 'done', mood: 'happy', say: 'Tokyo!' }));
+  check('Terra from before moods: done sent again without mood and say', !r.isError && /too old for moods/.test(textOf(r)) && same(bodies, ['{"state":"done","mood":"happy","say":"TOKYO!"}', '{"state":"done"}']),
     `${bodies.join(' then ')}: "${textOf(r)}"`);
   srv.close();
   srv = await fakeTerra(() => {}); // takes the request and never answers

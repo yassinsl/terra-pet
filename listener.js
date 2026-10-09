@@ -1,14 +1,15 @@
 // Local HTTP listener. Bound to 127.0.0.1 only. Four routes:
-//   POST /event  { "event": string, "prompt"?: string }  Claude Code hook events (hooks/terra-hook.sh)
-//   POST /mcp    { "reaction": name } or { "state": name }, or { "state": "done", "mood": name }
-//                the Claude desktop app (mcp/terra-mcp.js)
+//   POST /event  { "event": string, "prompt"?: string, "reply"?: string }  Claude Code hook
+//                events (hooks/terra-hook.sh); reply: Claude's answer, on stop
+//   POST /mcp    { "reaction": name } or { "state": name }, or { "state": "done", "mood"?: name,
+//                "say"?: text } (the done bubble) from the Claude desktop app (mcp/terra-mcp.js)
 //   POST /server { "action": "hello"|"bye"|"ping", "id": string }  that MCP server coming and
 //                going (answered with a small JSON status instead of 204)
 //   POST /say    { "text": string }  a speech bubble from the same MCP server (terra_say);
 //                answered 204, or 409 when speech bubbles are off, 422 when nothing in
 //                the text can be drawn
-// Prompt text and bubble text are passed on and never written to disk or logged. /mcp
-// takes nothing but names from the fixed lists in pet-commands.js.
+// Prompt, reply and bubble text are passed on and never written to disk or logged. /mcp
+// takes nothing but names from the fixed lists in pet-commands.js, and done's bubble text.
 const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
@@ -32,23 +33,26 @@ function reply(res, status, message) {
 
 // Checks a parsed /event body; returns the event for onEvent, or an error message.
 function hookEvent(body) {
-  const { event, prompt } = body;
+  const { event, prompt, reply } = body;
   if (!EVENTS.has(event)) return { error: 'unknown event' };
   if (prompt !== undefined && typeof prompt !== 'string') return { error: 'prompt must be a string' };
-  return { value: { event, prompt } };
+  if (reply !== undefined && (typeof reply !== 'string' || event !== 'stop')) return { error: 'reply must be a string, on stop' };
+  return { value: { event, prompt, reply } };
 }
 
 const COMMANDS = new Map([['reaction', REACTIONS], ['state', STATES]]);
 
 // Checks a parsed /mcp body: exactly one key, holding one of the known names, or
-// "state": "done" with a "mood" from MOODS beside it. (A Map, so keys such as "__proto__"
-// or "toString" find nothing.)
+// "state": "done" with a "mood" from MOODS and/or "say" (its bubble's text, 1 to MAX_SAY
+// characters) beside it. (A Map, so keys such as "__proto__" or "toString" find nothing.)
 function petCommand(body) {
   const keys = Object.keys(body);
-  if (keys.length === 2 && keys.includes('state') && keys.includes('mood')) {
-    if (body.state !== 'done') return { error: 'a mood goes with "done" only' };
-    if (!MOODS.includes(body.mood)) return { error: 'unknown mood' };
-    return { value: { state: 'done', mood: body.mood } };
+  if (keys.length > 1 && keys.includes('state') && keys.every((k) => k === 'state' || k === 'mood' || k === 'say')) {
+    const { mood, say } = body;
+    if (body.state !== 'done') return { error: 'a mood or say goes with "done" only' };
+    if (mood !== undefined && !MOODS.includes(mood)) return { error: 'unknown mood' };
+    if (say !== undefined && (typeof say !== 'string' || !say.length || say.length > MAX_SAY)) return { error: `say must be 1 to ${MAX_SAY} characters` };
+    return { value: { state: 'done', ...(mood ? { mood } : {}), ...(say ? { say } : {}) } };
   }
   if (keys.length !== 1 || !COMMANDS.has(keys[0])) return { error: 'expected exactly one of "reaction" or "state" (and "mood" with "done")' };
   const [key] = keys;

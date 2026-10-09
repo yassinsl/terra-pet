@@ -59,7 +59,7 @@ async function sent(arg, input) {
     ['prompt', S.prompt(`hello Terra "quoted"\nline 2 é 🙂 ${PROMPT_MARK}`), `{"event":"prompt","prompt":"hello Terra \\"quoted\\"\\nline 2 é 🙂 <mark>"}`],
     ['tool', S.tool, '{"event":"tool"}'],
     ['notify', S.notify, '{"event":"notify"}'],
-    ['stop', S.stop, '{"event":"stop"}'],
+    ['stop', S.stop, '{"event":"stop","reply":"Done <mark>"}'],
     ['session-start', S.start, '{"event":"session-start"}'],
     ['error', S.stopFailure, '{"event":"error"}'],
   ];
@@ -71,7 +71,7 @@ async function sent(arg, input) {
   section('hook works out the event from hook_event_name when no argument');
   const detect = [
     [S.prompt(`thanks ${PROMPT_MARK}`), `{"event":"prompt","prompt":"thanks <mark>"}`],
-    [S.tool, '{"event":"tool"}'], [S.notify, '{"event":"notify"}'], [S.stop, '{"event":"stop"}'],
+    [S.tool, '{"event":"tool"}'], [S.notify, '{"event":"notify"}'], [S.stop, '{"event":"stop","reply":"Done <mark>"}'],
     [S.start, '{"event":"session-start"}'], [S.stopFailure, '{"event":"error"}'], [S.toolFailure, '{"event":"error"}'],
   ];
   for (const [input, want] of detect) {
@@ -86,6 +86,16 @@ async function sent(arg, input) {
   check('  20,000 chars: sent without the text', r.got === '{"event":"prompt"}', r.got);
   r = await sent('prompt', 'this is not json');
   check('  stdin not JSON: still sends the event', r.got === '{"event":"prompt"}', r.got);
+  section('stop: Claude\'s reply for the speech bubble (last_assistant_message)');
+  r = await sent('stop', { ...S.stop, last_assistant_message: `\`\`\`js\nconst a = "q";\n\`\`\`\nAll done! ${PROMPT_MARK} ${'z'.repeat(5000)}` });
+  const reply = JSON.parse(r.got.replace('<mark>', PROMPT_MARK)).reply || '';
+  check('  sent as it is, cut to 4,000 characters (the pet takes the first sentence)', reply.length === 4000 && reply.startsWith('```js\nconst a = "q";') && reply.includes(PROMPT_MARK), `${reply.length} characters`);
+  r = await sent('stop', { ...S.stop, last_assistant_message: '' });
+  check('  empty reply: the event alone', r.got === '{"event":"stop"}', r.got);
+  r = await sent('stop', { ...S.stop, last_assistant_message: undefined });
+  check('  no last_assistant_message (older Claude Code): the event alone', r.got === '{"event":"stop"}', r.got);
+  r = await sent('stop', { ...S.stop, last_assistant_message: { text: 'odd' } });
+  check('  not a string: the event alone', r.got === '{"event":"stop"}', r.got);
   r = await sent('bogus', S.tool);
   check('  unknown argument: sends nothing', r.got === '(nothing)', r.got);
 

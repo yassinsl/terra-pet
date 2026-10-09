@@ -27,7 +27,9 @@ async function tool(name, args) {
   return r.isError || /isn't running|too old/.test(text) ? `tool said: ${text}` : undefined;
 }
 const react = (reaction) => () => tool('terra_react', { reaction });
-const setState = (state, mood) => () => tool('terra_state', mood ? { state, mood } : { state });
+// "done" needs a line for the bubble; these tests are about the pet, so any short one.
+const stateArgs = (state, mood) => ({ state, ...(mood ? { mood } : {}), ...(state === 'done' ? { say: 'OK!' } : {}) });
+const setState = (state, mood) => () => tool('terra_state', stateArgs(state, mood));
 
 // Calls the tools one after another as fast as they go, the way Claude does in a burst:
 // 'state:working', 'state:done:happy' (with a mood) or a reaction name.
@@ -36,7 +38,7 @@ async function burst(...calls) {
   const t0 = Date.now();
   for (const call of calls) {
     const [, state, mood] = call.split(':');
-    const [name, args] = call.startsWith('state:') ? ['terra_state', mood ? { state, mood } : { state }] : ['terra_react', { reaction: call }];
+    const [name, args] = call.startsWith('state:') ? ['terra_state', stateArgs(state, mood)] : ['terra_react', { reaction: call }];
     const r = await tool(name, args);
     if (r) return r;
   }
@@ -178,6 +180,23 @@ start(async () => {
     const ok = status === '204' && after < 300 && tl.map((s) => s.state).join(' ') === 'sitDown work standUp sad happy idle' && (await js('queue.length + (playing ? 1 : 0)')) === 0;
     return { ok, line: `hook HTTP ${status}, stars ${after} ms after it; ${showTimeline(tl)} ms` };
   });
+
+  section('"done" through the real MCP server: say is required and shows');
+  {
+    await waitFor('idle', 6000);
+    const from = t.states.length;
+    const refused = await client.callTool({ name: 'terra_state', arguments: { state: 'done', mood: 'happy' } });
+    await wait(500);
+    check('  done without say: refused by the tool, the pet does nothing', refused.isError === true && /resend terra_state with state "done"/.test(refused.content.map((c) => c.text).join(' ')) && t.states.length === from,
+      refused.content.map((c) => c.text).join(' ').slice(0, 120));
+    const bubbleWin = require('electron').BrowserWindow.getAllWindows().find((w) => w !== t.win && /bubble\.html$/.test(w.webContents.getURL()));
+    const r = await client.callTool({ name: 'terra_state', arguments: { state: 'done', mood: 'happy', say: 'Tokyo!' } });
+    await waitFor('happy', 3000, from);
+    await wait(150);
+    const shown = await bubbleWin.webContents.executeJavaScript('current && current.glyphs.length');
+    check('  done with say: its bubble shows while the pet celebrates', !r.isError && bubbleWin.isVisible() && shown === 6 && /Its bubble says: "TOKYO!"/.test(r.content[0].text), r.content[0].text);
+    await waitFor('idle', 4000, from);
+  }
 
   section('"done" with a mood (after working, no reaction)');
   const moods = [

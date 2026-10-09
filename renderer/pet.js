@@ -339,7 +339,7 @@ const MIN_SHOWN = 1500;                 // ms a queued reaction stays on screen,
 const LOOP_ALONE = 4000;                // ms a looping reaction plays when nothing waits after it
 const GLUM = new Set(['sad', 'angry']); // "done" after one of these, with no mood, doesn't celebrate
 
-let queue = [];           // waiting commands, oldest first: { reaction }, { state, ending } or { say }
+let queue = [];           // waiting commands, oldest first: { reaction }, { state, ending, say? } or { say }
 let playing = null;       // the queued reaction on screen (see startReaction)
 let mood = null;          // the last reaction since the last "working" or "done", as they arrive
 let replyWorking = false; // "working" has played, and no done, waiting or idle since
@@ -351,7 +351,7 @@ let replyWorking = false; // "working" has played, and no done, waiting or idle 
 // other: happy), or neutral when there was none either.
 function queueCommand({ reaction, state: name, mood: doneMood, say } = {}) {
   let command;
-  if (Number.isInteger(say)) {
+  if (Number.isInteger(say) && !name) {
     // A speech bubble (terra_say; main.js keeps the text). A newer one replaces the one
     // on screen, or the one waiting, rather than waiting behind it.
     if (playing && playing.say) {
@@ -360,7 +360,7 @@ function queueCommand({ reaction, state: name, mood: doneMood, say } = {}) {
       window.terra.showBubble(say);
       return;
     }
-    const waiting = queue.findIndex((c) => c.say);
+    const waiting = queue.findIndex((c) => c.say && !c.state); // a terra_say, not a done with its line
     if (waiting >= 0) {
       queue[waiting] = { say };
       return;
@@ -371,7 +371,7 @@ function queueCommand({ reaction, state: name, mood: doneMood, say } = {}) {
     command = { reaction };
   } else if (name === 'done') {
     const fromReaction = mood && !GLUM.has(mood) ? 'happy' : 'neutral';
-    command = { state: 'done', ending: doneMood || fromReaction };
+    command = { state: 'done', ending: doneMood || fromReaction, ...(Number.isInteger(say) ? { say } : {}) };
     mood = null;
   } else if (name === 'working' || name === 'waiting' || name === 'idle') {
     if (name === 'working') mood = null;
@@ -430,7 +430,7 @@ function startCommand(command) {
     startReaction(command.reaction);
     return;
   }
-  if (command.say) {
+  if (command.say && !command.state) {
     startSay(command.say);
     return;
   }
@@ -445,6 +445,7 @@ function startCommand(command) {
       break;
     case 'done':
       replyWorking = false;
+      if (command.say) window.terra.showBubble(command.say); // done's line, while the mood plays
       if (command.ending === 'happy') startReaction('stars', { back: 'idle' });
       else if (command.ending === 'sad' || command.ending === 'angry') startReaction(command.ending, { back: 'idle', once: true });
       else setState('idle'); // neutral: just stand up (if working) and idle

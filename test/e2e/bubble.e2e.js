@@ -2,13 +2,15 @@
 // sends it) -> the pet's queue -> the bubble window. Its pixels against
 // design/terra-bubble-assets/examples-1x and examples-4x, trimming, HTML shown as plain
 // text, flipping at the screen edges and following the pet, the timer, a click to dismiss,
-// a new message replacing the old, the pet talking meanwhile, and the tray checkbox.
+// a new message replacing the old, the pet talking meanwhile, the tray checkbox, "done"
+// with its say line (and no duplicate of a terra_say), and Claude Code's Stop hook.
 // Run: npx electron test/e2e/bubble.e2e.js   (or npm test)
 const {
   ROOT, t, check, section, wait, js, menuItem, subItem, waitFor, attempt, start, BrowserWindow, fs, path,
 } = require('./lib.js');
 const { PROMPT_MARK } = require('../lib.js');
 const { nativeImage, screen } = require('electron');
+const { spawn } = require('node:child_process');
 const { FONT, TIMING, layoutBubble } = require(path.join(ROOT, 'bubble-layout.js'));
 
 const EXAMPLES = path.join(ROOT, 'design', 'terra-bubble-assets');
@@ -104,6 +106,7 @@ start(async () => {
       `HTTP ${status}; ${got ? `${got.width}x${got.height}` : 'no frame'} vs ${want.width}x${want.height}, ${off < 0 ? 'sizes differ' : `${off} pixels differ`}, tail ${tail}`);
     if (file === 'tokyo') {
       // The window on screen at 4x: examples-4x, each art pixel a block of device pixels.
+      await wait(150); // the full bubble on screen, not still the pop-in frame
       const shot = rgbaOf(await bubbleWin.webContents.capturePage());
       const want4 = rgbaOf(nativeImage.createFromPath(path.join(EXAMPLES, 'examples-4x', 'tokyo.png')));
       const k = shot.width / want4.width; // device pixels per 4x pixel
@@ -133,7 +136,7 @@ start(async () => {
     await petAt(middle);
     await say('Tokyo!');
     await waitPhase('full');
-    await wait(50);
+    await wait(150);
     const scale = await bjs('current.scale');
     const shot = rgbaOf(await bubbleWin.webContents.capturePage());
     const art = rgbaOf(nativeImage.createFromPath(path.join(EXAMPLES, 'examples-1x', 'tokyo.png')));
@@ -342,6 +345,107 @@ start(async () => {
     const back = await waitPhase('full');
     check('  off: HTTP 409, no bubble, remembered; on again: shows', off && prefs.speechBubbles === false && again === 204 && back && menuItem('Speech bubbles').checked,
       `off: HTTP ${status}, saved ${json({ speechBubbles: prefs.speechBubbles })}; on: HTTP ${again}`);
+  }
+
+  section('"done" with say (Claude desktop)');
+  // Every new bubble starts with its pop-in frame: count those, with what they say.
+  const pops = [];
+  const realSend = bubbleWin.webContents.send.bind(bubbleWin.webContents);
+  bubbleWin.webContents.send = (channel, state, ...rest) => {
+    if (channel === 'bubble:draw' && state.phase === 'pop') pops.push(state.glyphs.length);
+    return realSend(channel, state, ...rest);
+  };
+  const port = () => fs.readFileSync(path.join(process.env.HOME, '.terra-pet', 'port'), 'utf8').trim();
+  const mcp = (body) => fetch(`http://127.0.0.1:${port()}/mcp`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const chain = (list) => list.map((x) => x.state).filter((x, i, a) => i === 0 || x !== a[i - 1]).join(' ');
+  await quiet();
+  {
+    pops.length = 0;
+    const from = t.states.length;
+    await mcp({ state: 'working' });
+    await mcp({ state: 'done', mood: 'happy', say: 'TOKYO!' });
+    await waitFor('happy', 4000, from);
+    await wait(100);
+    const during = { phase: await phase(), frame: await frame1x() };
+    const want = rgbaOf(nativeImage.createFromPath(path.join(EXAMPLES, 'examples-1x', 'tokyo.png')));
+    await waitFor('idle', 4000, from);
+    const states = chain(t.states.slice(from));
+    check('  working, done (happy, say "Tokyo!"): the bubble shows while Terra celebrates, then idle', during.phase === 'full' && differ(during.frame, want) === 0 && states === 'sitDown work standUp happy idle' && pops.length === 1,
+      `${states}; bubble ${during.phase}, ${differ(during.frame, want)} pixels off tokyo.png`);
+  }
+  await quiet();
+  {
+    pops.length = 0;
+    const from = t.states.length;
+    await mcp({ state: 'working' });
+    await say('Tokyo!');
+    await mcp({ state: 'done', mood: 'happy', say: 'TOKYO!' });
+    await waitFor('happy', 12000, from);
+    await quiet();
+    const one = pops.length;
+    pops.length = 0;
+    await mcp({ state: 'working' });
+    await say('Tokyo!');
+    await mcp({ state: 'done', mood: 'neutral', say: 'Paris!' });
+    await waitPhase('hidden', 14000);
+    await wait(300);
+    await waitPhase('hidden', 8000);
+    await quiet();
+    const two = pops.length;
+    pops.length = 0;
+    await mcp({ state: 'working' });
+    await mcp({ state: 'done', mood: 'neutral', say: 'TOKYO!' });
+    await waitPhase('full');
+    await quiet();
+    const next = pops.length;
+    check('  no duplicate: terra_say "Tokyo!" then done with the same line shows one bubble', one === 1 && two === 2 && next === 1,
+      `same line: ${one} bubble(s); different lines: ${two}; the same line in the next reply: ${next}`);
+  }
+
+  section("Claude Code's Stop hook: the first sentence of the reply");
+  const runHook = (input) => new Promise((resolve) => {
+    const p = spawn('/bin/sh', [path.join(ROOT, 'hooks', 'terra-hook.sh'), 'stop'], { env: { ...process.env, HOME: process.env.HOME } });
+    p.on('close', resolve);
+    p.stdin.end(JSON.stringify(input));
+  });
+  const stopInput = (message) => ({
+    session_id: 'abc123', transcript_path: '/tmp/x.jsonl', cwd: '/tmp', permission_mode: 'default', hook_event_name: 'Stop',
+    stop_hook_active: false, last_assistant_message: message, background_tasks: [], session_crons: [],
+  });
+  await quiet();
+  {
+    pops.length = 0;
+    const from = t.states.length;
+    const reply = `\`\`\`js\nconst secret = "${PROMPT_MARK}";\n\`\`\`\nAll tests pass! I also cleaned up the ${PROMPT_MARK} config.`;
+    await runHook(stopInput(reply));
+    await waitPhase('full');
+    const glyphs = await bjs('current.glyphs.length');
+    const want = layoutBubble('All tests pass!');
+    const stars = await waitFor('happy', 3000, from);
+    check('  fake Stop input: code block skipped, "All tests pass!" in the bubble, Terra still celebrates', glyphs === want.glyphs.length && stars && pops.length === 1,
+      `${glyphs} glyphs (want ${want.glyphs.length}: ${want.lines.join(' / ')}), stars ${stars}`);
+  }
+  await quiet();
+  {
+    pops.length = 0;
+    const from = t.states.length;
+    await runHook(stopInput('```\nnpm test\n```'));
+    const stars = await waitFor('happy', 3000, from);
+    await wait(300);
+    check('  a reply that is only code: stars, no bubble', stars && pops.length === 0 && (await phase()) === 'hidden', `${pops.length} bubbles`);
+  }
+  await quiet();
+  {
+    pops.length = 0;
+    menuItem('Speech bubbles').click(); // off
+    const from = t.states.length;
+    await runHook(stopInput('All tests pass!'));
+    await mcp({ state: 'working' });
+    await mcp({ state: 'done', mood: 'happy', say: 'TOKYO!' });
+    await waitFor('idle', 8000, from + 3);
+    await wait(300);
+    menuItem('Speech bubbles').click(); // on again
+    check('  Speech bubbles off: no bubble from the hook or from done, the pet as usual', pops.length === 0 && chain(t.states.slice(from)).includes('happy'), `${pops.length} bubbles; ${chain(t.states.slice(from))}`);
   }
 
   section('privacy');

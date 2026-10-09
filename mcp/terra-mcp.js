@@ -35,11 +35,14 @@ terra_react now and then to show how the conversation feels. Always give "done" 
 matches how the conversation went, so Terra ends the right way: happy when it went well or
 the user was kind (they thanked you), sad for bad news or a failure, angry when the user
 insulted you or is fed up, neutral for an ordinary answer (most replies). For example:
-thanks -> happy, an insult -> angry, bad news -> sad, a normal answer -> neutral. Use
-terra_say for short, simple answers and friendly remarks, for example "Paris is the capital
-of France!" or "Happy to help!", at most once per reply; never for code, lists, long
-explanations or anything sensitive. There is no need to mention the tools or their results
-to the user unless they ask about Terra.`;
+thanks -> happy, an insult -> angry, bad news -> sad, a normal answer -> neutral. "done"
+also always needs "say": one short line, about 40 characters, that Terra shows in its
+speech bubble: for a short answer the answer itself ("Tokyo!", "42!"), for a long answer a
+short summary ("Facebook: Meta's social network!"), for thanks or greetings something
+friendly ("Happy to help!"); never code or private details. terra_say is only for an extra
+line during a reply (at most once; never for code, lists, long explanations or anything
+sensitive); the answer itself goes in done's say. There is no need to mention the tools or
+their results to the user unless they ask about Terra.`;
 
 const REACT_DESCRIPTION = `Play a short reaction on Terra, the user's desktop pet (a small pixel-art robot on their screen). Purely cosmetic: the user just sees the pet react.
 Use it when a moment clearly has a feeling, at most once or twice per reply:
@@ -55,7 +58,7 @@ Calls made close together don't cut each other off: Terra plays them one after a
 
 const STATE_DESCRIPTION = `Set what Terra, the user's desktop pet, is doing, so the user can glance at it to see your status.
 - working: call it before a long answer or a multi-step task (research, writing code, several tool calls). Terra sits at its computer until you set another state.
-- done: call it when you have finished that work, always with a mood (below). Terra stands up, shows the mood, then idles.
+- done: call it when you have finished that work, always with a mood and a say line (below). Terra stands up, shows the mood with your line in its speech bubble, then idles.
 - waiting: call it when you stop to wait for the user's answer, decision or approval. Terra keeps asking until you set another state.
 - idle: puts Terra back to rest, for example when you stop without finishing.
 The mood (only with done) is how the conversation went:
@@ -64,17 +67,22 @@ The mood (only with done) is how the conversation went:
 - angry: the user insulted you or is fed up. Terra looks angry.
 - neutral: an ordinary answer, nothing special (most replies). Terra just stands up and idles.
 Examples: thanks -> happy, an insult -> angry, bad news -> sad, a normal answer -> neutral.
-For example: terra_state("working") before a long answer and terra_state("done", mood "neutral") after it. Skip it for short, quick replies. Terra gives up on working or waiting by itself after 10 minutes.`;
+The say line (required with done) is one short line, about 40 characters, for Terra's speech bubble:
+- a short answer: the answer itself ("Tokyo!", "42!")
+- a long answer: a short summary ("Facebook: Meta's social network!")
+- thanks or greetings: something friendly ("Happy to help!")
+Never code or private details. 2 lines of about 20 characters show; longer is cut with "...".
+For example: terra_state("working") before a long answer and terra_state("done", mood "neutral", say "Tokyo!") after it. Skip it for short, quick replies. Terra gives up on working or waiting by itself after 10 minutes.`;
 
 const SAY_DESCRIPTION = `Show a short line of text in a speech bubble next to Terra, the user's desktop pet, while it talks. The user sees it on their screen for a few seconds.
-Use it for short, simple answers and friendly remarks, for example "Paris is the capital of France!" or "Happy to help!". At most once per reply.
+Use it for short, simple answers and friendly remarks, for example "Paris is the capital of France!" or "Happy to help!", as an extra line during a reply: the answer itself goes in terra_state("done")'s say. At most once per reply.
 Do not use it for code, lists, long explanations or anything sensitive (passwords, personal or private details).
 It fits 2 lines of about 20 characters each; longer text is cut with "...". Terra writes in capital letters and has only A-Z, 0-9, spaces and . , ! ? : ' - + ( ) /; anything else is left out.`;
 
 const STATE_DONE = {
   working: 'Terra is working at its computer. Call terra_state("done") with a mood when you finish.',
   waiting: 'Terra is waiting for the user.',
-  done: 'Terra stands up and idles (or ends the way your last reaction in this reply suggests). Next time give done a mood: happy, sad, angry or neutral.',
+  done: 'Terra stands up and idles (or ends the way your last reaction in this reply suggests). Next time give done a mood too: happy, sad, angry or neutral.',
   idle: 'Terra is back to idle.',
 };
 const DONE_MOOD = {
@@ -120,15 +128,26 @@ const DOWN = "Terra (the desktop pet) isn't running, so there was nothing to sho
 
 async function send(body, okMessage) {
   let { status, down } = await post(body);
-  // A Terra from before moods turns "done" with a mood away; it still takes plain "done".
-  if (status === 400 && body.mood) {
+  // A Terra from before moods and done's bubble turns them away; it still takes plain "done".
+  if (status === 400 && (body.mood || body.say)) {
     ({ status, down } = await post({ state: body.state }));
-    okMessage = 'This copy of Terra is too old for moods, so it ended its own way. No need to retry.';
+    okMessage = 'This copy of Terra is too old for moods and done\'s speech bubble, so it ended its own way. No need to retry.';
   }
   if (down) return text(DOWN);
   if (status === 204) return text(okMessage);
   if (status === 404) return text('This copy of Terra is too old to take commands from Claude desktop, so nothing was shown. No need to retry.');
   return text(`Terra didn't accept the command (HTTP ${status}).`, true);
+}
+
+const SAY_REQUIRED = 'done needs "say": resend terra_state with state "done", your mood and say, a short answer or summary for Terra\'s speech bubble (about 40 characters), for example "Tokyo!" or "Happy to help!".';
+
+// "done" with its mood and say line: sends the line as the font will draw it (or none, when
+// nothing in it can be drawn), and tells Claude what Terra shows.
+function done(mood, line) {
+  const layout = layoutBubble(line);
+  const body = { state: 'done', ...(mood ? { mood } : {}), ...(layout ? { say: cleanText(line).slice(0, MAX_INPUT) } : {}) };
+  const ending = mood ? DONE_MOOD[mood] : STATE_DONE.done;
+  return send(body, layout ? `${ending} Its bubble says: "${layout.lines.join(' / ')}"${layout.trimmed ? ' (cut to fit: keep it shorter next time)' : ''}.` : ending);
 }
 
 // terra_say: sends Terra the text the font can draw (nothing else), and tells Claude what
@@ -163,9 +182,12 @@ function createServer() {
     inputSchema: z.object({
       state: z.enum(STATES).describe('What you are doing now: working, waiting, done or idle.'),
       mood: z.enum(MOODS).optional().describe('Only with done, and always with done: how the conversation went. happy, sad, angry or neutral.'),
+      say: z.string().optional().describe('Required with done (ignored otherwise): one short line, about 40 characters, for Terra\'s speech bubble. A short answer: the answer itself ("Tokyo!", "42!"). A long answer: a short summary ("Facebook: Meta\'s social network!"). Thanks or greetings: something friendly ("Happy to help!"). Never code or private details.'),
+    }).superRefine(({ state, say: line }, ctx) => {
+      if (state === 'done' && !(typeof line === 'string' && line.trim())) ctx.addIssue({ code: 'custom', path: ['say'], message: SAY_REQUIRED });
     }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, ({ state, mood }) => (state === 'done' && mood ? send({ state, mood }, DONE_MOOD[mood]) : send({ state }, STATE_DONE[state])));
+  }, ({ state, mood, say: line }) => (state === 'done' ? done(mood, line) : send({ state }, STATE_DONE[state])));
 
   server.registerTool('terra_say', {
     title: 'Terra: say',

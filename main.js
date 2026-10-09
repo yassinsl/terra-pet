@@ -10,7 +10,7 @@ const visibility = require('./visibility.js');
 const claude = require('./claude-app.js'); // used as claude.isRunning() so tests can fake it
 const openWithClaude = require('./open-with-claude.js');
 const { createBubbleWindow } = require('./bubble-window.js');
-const { layoutBubble } = require('./bubble-layout.js');
+const { cleanText, firstSentence, layoutBubble } = require('./bubble-layout.js');
 const { HOST, startListener, removePortFile } = require('./listener.js');
 const { matchReaction } = require('./reactions.js');
 
@@ -48,7 +48,9 @@ const mcpSessions = new Set(); // MCP servers (one per running Claude desktop) t
 let claudeQuitTimer = null;
 let bubble = null;     // the speech bubble's window (bubble-window.js)
 let sayCount = 0;
-let pendingSay = null; // { id, layout }: the newest terra_say, until the pet starts talking it
+const pendingSays = new Map(); // id -> layout: bubbles the pet has queued and not shown yet
+const MAX_PENDING_SAYS = 6;    // the pet's queue holds 5, plus the one playing
+const repliedSays = new Set(); // what terra_say showed in this reply (since "working"), cleaned
 
 // The packaged app has no npm scripts, so it takes these instead:
 //   Terra --install-hooks | --uninstall-hooks [--settings <path>]
@@ -94,7 +96,7 @@ const busy = (s) => s === 'work' || s === 'sitDown';
 const working = () => busy(pet.state) || busy(pet.next);
 
 // Claude Code hook events -> pet states.
-function onHookEvent({ event, prompt }) {
+function onHookEvent({ event, prompt, reply }) {
   lastEventAt = Date.now();
   lastCodeEventAt = lastEventAt;
   applyVisibility(); // a Claude Code session may be what shows Terra
@@ -114,6 +116,8 @@ function onHookEvent({ event, prompt }) {
       break;
     case 'stop':
       playPetReaction('stars', { then: 'idle' });
+      // Claude's reply (the hook's last_assistant_message): its first sentence in the bubble.
+      if (reply) showBubbleNow(firstSentence(reply));
       break;
     case 'error':
       setPetState('dizzy', { then: 'idle' });
@@ -154,9 +158,43 @@ function cancelClaudeQuit() {
 // Claude desktop app (mcp/terra-mcp.js) -> pet. The listener has checked the names
 // against pet-commands.js. Claude sends these in quick bursts, so the renderer queues
 // them and plays them in order (see "Claude desktop's queue" in renderer/pet.js).
-function onPetCommand({ reaction, state, mood }) {
+// "done" brings a line for the bubble (say), shown while Terra plays its mood, unless
+// terra_say already showed the same words in this reply.
+function onPetCommand({ reaction, state, mood, say }) {
   lastEventAt = Date.now();
-  sendToPet('pet:command', reaction ? { reaction } : mood ? { state, mood } : { state });
+  if (reaction) {
+    sendToPet('pet:command', { reaction });
+    return;
+  }
+  const command = { state, ...(mood ? { mood } : {}) };
+  if (state === 'working') repliedSays.clear();
+  if (state === 'done') {
+    if (say && !repliedSays.has(cleanText(say))) {
+      const id = queueBubble(say);
+      if (id) command.say = id;
+    }
+    repliedSays.clear();
+  }
+  sendToPet('pet:command', command);
+}
+
+// Keeps a bubble for the pet's queue (it asks for it with showBubble when its turn comes);
+// returns its id, or null when bubbles are off or nothing in the text can be drawn.
+function queueBubble(text) {
+  if (!prefs.speechBubbles) return null;
+  const layout = layoutBubble(text);
+  if (!layout) return null;
+  const id = ++sayCount;
+  pendingSays.set(id, layout);
+  for (const old of pendingSays.keys()) if (pendingSays.size > MAX_PENDING_SAYS) pendingSays.delete(old);
+  return id;
+}
+
+// A bubble straight away, outside the queue (Claude Code's Stop hook), while the pet
+// celebrates as it always has.
+function showBubbleNow(text) {
+  const layout = prefs.speechBubbles && petShown && !hidePending && layoutBubble(text);
+  if (layout) bubble.show(++sayCount, layout);
 }
 
 // terra_say from Claude desktop (the listener has checked it is short text). The pet queues
@@ -165,20 +203,20 @@ function onPetCommand({ reaction, state, mood }) {
 // and 422 when nothing in the text can be drawn.
 function onSay({ text }) {
   if (!prefs.speechBubbles) return 409;
-  const layout = layoutBubble(text);
-  if (!layout) return 422;
+  const id = queueBubble(text);
+  if (!id) return 422;
   lastEventAt = Date.now();
-  pendingSay = { id: ++sayCount, layout };
-  sendToPet('pet:command', { say: pendingSay.id });
+  repliedSays.add(cleanText(text));
+  sendToPet('pet:command', { say: id });
   return undefined;
 }
 
-// The pet has started talking bubble `id` (renderer/pet.js); show it, unless it has been
-// replaced since, or bubbles were turned off, or the pet is hidden.
+// The pet has come to bubble `id` in its queue (renderer/pet.js); show it, unless it has
+// gone since (replaced, or bubbles turned off) or the pet is hidden.
 function showBubble(id) {
-  const say = pendingSay;
-  if (say && say.id === id) pendingSay = null;
-  if (say && say.id === id && prefs.speechBubbles && petShown && !hidePending) bubble.show(id, say.layout);
+  const layout = pendingSays.get(id);
+  pendingSays.delete(id);
+  if (layout && prefs.speechBubbles && petShown && !hidePending) bubble.show(id, layout);
   else sendToPet('pet:bubble-ended', id);
 }
 
@@ -186,7 +224,7 @@ function setSpeechBubbles(on) {
   prefs.speechBubbles = on;
   savePrefs();
   if (!on) {
-    pendingSay = null;
+    pendingSays.clear();
     bubble.hide();
   }
 }

@@ -24,6 +24,27 @@ for (const [label, raw, want] of [
 }
 check('  only the first 500 characters are looked at', b.cleanText('a'.repeat(600)).length === b.MAX_INPUT);
 
+section('first sentence of a Claude Code reply (Stop hook), code blocks skipped');
+for (const [label, reply, want] of [
+  ['the docs\' example', "I've completed the refactoring. Here's a summary...", "I've completed the refactoring."],
+  ['a code block first is skipped', '```js\nconst x = 1;\n```\nDone! The tests pass now.', 'Done!'],
+  ['~~~ fences too', '~~~\nls -la\n~~~\nListed the files.', 'Listed the files.'],
+  ['an unclosed code block runs to the end', 'Here you go:\n```\nonly code, never closed', 'Here you go:'],
+  ['only code: nothing', '```\nrm -rf build\n```', ''],
+  ['headings and table rows are skipped', '## Summary\n| a | b |\n**Fixed** the [login bug](https://x.y/z) in `auth.js`. More.', 'Fixed the login bug in auth.js.'],
+  ['a list item', '- First item\n- Second', 'First item'],
+  ['a dot inside a number is not an end', 'Version 1.5 is out. Next.', 'Version 1.5 is out.'],
+  ['no full stop: the first line', 'Tokyo\nMore lines', 'Tokyo'],
+  ['not a string', null, ''],
+]) {
+  const got = b.firstSentence(reply);
+  check(`  ${label}`, got === want, JSON.stringify(got));
+}
+{
+  const long = b.layoutBubble(b.firstSentence('Refactored the authentication module so that sessions expire after thirty minutes. Then more.'));
+  check('  a long first sentence: the bubble trims it to 2 lines', long.lines.length === 2 && long.trimmed && long.lines[1].endsWith('...'), long.lines.join(' / '));
+}
+
 section('lines: 2 at most, about 20 characters each, then "..."');
 for (const [label, text, want, trimmed] of [
   ['one line', 'TOKYO!', ['TOKYO!'], false],
