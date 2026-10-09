@@ -17,7 +17,7 @@ const path = require('node:path');
 const { McpServer } = require('@modelcontextprotocol/server');
 const { serveStdio } = require('@modelcontextprotocol/server/stdio');
 const { z } = require('zod');
-const { REACTIONS, STATES } = require('../pet-commands.js');
+const { REACTIONS, STATES, MOODS } = require('../pet-commands.js');
 const { version } = require('../package.json');
 const launcher = require('./pet-launcher.js');
 const openWithClaude = require('../open-with-claude.js');
@@ -29,8 +29,12 @@ const portFile = () => path.join(os.homedir(), '.terra-pet', 'port');
 const INSTRUCTIONS = `Terra is a small pixel-art robot that lives on the user's desktop. These tools only
 animate it; they change nothing else. Use terra_state to show what you are doing (working
 before a long answer or task, done when it is finished, waiting when you need the user) and
-terra_react now and then to show how the conversation feels. There is no need to mention
-the tools or their results to the user unless they ask about Terra.`;
+terra_react now and then to show how the conversation feels. Always give "done" a mood that
+matches how the conversation went, so Terra ends the right way: happy when it went well or
+the user was kind (they thanked you), sad for bad news or a failure, angry when the user
+insulted you or is fed up, neutral for an ordinary answer (most replies). For example:
+thanks -> happy, an insult -> angry, bad news -> sad, a normal answer -> neutral. There is
+no need to mention the tools or their results to the user unless they ask about Terra.`;
 
 const REACT_DESCRIPTION = `Play a short reaction on Terra, the user's desktop pet (a small pixel-art robot on their screen). Purely cosmetic: the user just sees the pet react.
 Use it when a moment clearly has a feeling, at most once or twice per reply:
@@ -46,16 +50,28 @@ Calls made close together don't cut each other off: Terra plays them one after a
 
 const STATE_DESCRIPTION = `Set what Terra, the user's desktop pet, is doing, so the user can glance at it to see your status.
 - working: call it before a long answer or a multi-step task (research, writing code, several tool calls). Terra sits at its computer until you set another state.
-- done: call it when you have finished that work. Terra celebrates, then idles; after a sad or angry reaction in the same reply it just stands up and idles.
+- done: call it when you have finished that work, always with a mood (below). Terra stands up, shows the mood, then idles.
 - waiting: call it when you stop to wait for the user's answer, decision or approval. Terra keeps asking until you set another state.
 - idle: puts Terra back to rest, for example when you stop without finishing.
-For example: terra_state("working") before a long answer and terra_state("done") after it. Skip it for short, quick replies. Terra gives up on working or waiting by itself after 10 minutes.`;
+The mood (only with done) is how the conversation went:
+- happy: it went well or the user was kind (they thanked you, the tests pass). Terra celebrates with stars.
+- sad: bad news or a failure (it still doesn't work, you couldn't do it). Terra looks sad.
+- angry: the user insulted you or is fed up. Terra looks angry.
+- neutral: an ordinary answer, nothing special (most replies). Terra just stands up and idles.
+Examples: thanks -> happy, an insult -> angry, bad news -> sad, a normal answer -> neutral.
+For example: terra_state("working") before a long answer and terra_state("done", mood "neutral") after it. Skip it for short, quick replies. Terra gives up on working or waiting by itself after 10 minutes.`;
 
 const STATE_DONE = {
-  working: 'Terra is working at its computer. Call terra_state("done") when you finish.',
+  working: 'Terra is working at its computer. Call terra_state("done") with a mood when you finish.',
   waiting: 'Terra is waiting for the user.',
-  done: 'Terra finishes what it is showing, then celebrates and idles (after a sad or angry reaction it just idles).',
+  done: 'Terra stands up and idles (or ends the way your last reaction in this reply suggests). Next time give done a mood: happy, sad, angry or neutral.',
   idle: 'Terra is back to idle.',
+};
+const DONE_MOOD = {
+  happy: 'Terra celebrates with stars, then idles.',
+  sad: 'Terra looks sad for a moment, then idles.',
+  angry: 'Terra looks angry for a moment, then idles.',
+  neutral: 'Terra stands up and idles.',
 };
 
 // Resolves to { status } from the listener, or { down: true } when nothing answers.
@@ -91,7 +107,12 @@ function post(body) {
 const text = (message, isError = false) => ({ content: [{ type: 'text', text: message }], ...(isError ? { isError } : {}) });
 
 async function send(body, okMessage) {
-  const { status, down } = await post(body);
+  let { status, down } = await post(body);
+  // A Terra from before moods turns "done" with a mood away; it still takes plain "done".
+  if (status === 400 && body.mood) {
+    ({ status, down } = await post({ state: body.state }));
+    okMessage = 'This copy of Terra is too old for moods, so it ended its own way. No need to retry.';
+  }
   if (down) return text("Terra (the desktop pet) isn't running, so there was nothing to show. That's fine: carry on, no need to retry.");
   if (status === 204) return text(okMessage);
   if (status === 404) return text('This copy of Terra is too old to take commands from Claude desktop, so nothing was shown. No need to retry.');
@@ -115,9 +136,10 @@ function createServer() {
     description: STATE_DESCRIPTION,
     inputSchema: z.object({
       state: z.enum(STATES).describe('What you are doing now: working, waiting, done or idle.'),
+      mood: z.enum(MOODS).optional().describe('Only with done, and always with done: how the conversation went. happy, sad, angry or neutral.'),
     }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, ({ state }) => send({ state }, STATE_DONE[state]));
+  }, ({ state, mood }) => (state === 'done' && mood ? send({ state, mood }, DONE_MOOD[mood]) : send({ state }, STATE_DONE[state])));
 
   return server;
 }

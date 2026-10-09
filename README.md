@@ -131,13 +131,28 @@ Claude two tools. Claude decides when to call them:
 | Claude calls... | When | Terra |
 | :- | :- | :- |
 | `terra_state("working")` | before a long answer or a multi-step task | sits down to work |
-| `terra_state("done")` | when it has finished | is happy, with stars, then idles (after a sad or angry reaction in the same reply: just stands up and idles) |
+| `terra_state("done", mood)` | when it has finished, with how it went | shows the mood, then idles (see below) |
 | `terra_state("waiting")` | when it needs your answer or approval | asks, with a question mark |
 | `terra_state("idle")` | when it stops without finishing | stands up and idles |
 | `terra_react("love")`, ... | when the moment has a feeling | plays that [reaction](#reactions), then goes back to what it was doing |
 
 `terra_react` takes any of the eight reactions: `hi`, `love`, `angry`, `sad`, `idea`,
 `stars`, `talk` or `ask`.
+
+`done` takes a mood, so Terra's ending matches the conversation (Claude is told to always
+pass one):
+
+| Mood | For | Terra |
+| :- | :- | :- |
+| `happy` | it went well, you thanked Claude | is happy, with stars |
+| `sad` | bad news, something failed | looks sad |
+| `angry` | you insulted Claude or are fed up | looks angry |
+| `neutral` | an ordinary answer | stands up and idles, no celebration |
+
+Without a mood, a reaction Claude played earlier in the same reply decides: after `sad`
+or `angry` Terra just idles, after any other it celebrates; with no reaction either, it
+just idles. A mood always beats the reaction before it. (Claude Code's hooks aren't
+affected: when Claude Code finishes, Terra still celebrates with stars.)
 
 Claude often makes these calls a moment apart (working, a reaction, done, all within a
 second), so Terra plays them one after another instead of letting each one cut off the

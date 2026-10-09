@@ -3,10 +3,14 @@
 //
 // REACTIONS are emotes from renderer/emotes.js. STATES map to the pet like this:
 //   working -> sits down at its computer      waiting -> asks, with a question mark
-//   done    -> happy, with stars, then idle   idle    -> stands up (if it was working) and idles
-//              (after sad or angry: no stars)
+//   done    -> stands up, shows its MOOD, idles  idle -> stands up (if it was working) and idles
+// MOODS go with "done" only:
+//   happy -> stars   sad -> looks sad   angry -> looks angry   neutral -> nothing, just idles
+// With no mood, the last reaction since "working" decides (sad or angry: neutral, any
+// other: happy), and with no reaction either it is neutral.
 // They play one after another, each to its end (see the queue in renderer/pet.js).
 const REACTIONS = ['hi', 'love', 'angry', 'sad', 'idea', 'stars', 'talk', 'ask'];
 const STATES = ['working', 'waiting', 'done', 'idle'];
+const MOODS = ['happy', 'sad', 'angry', 'neutral'];
 
-module.exports = { REACTIONS, STATES };
+module.exports = { REACTIONS, STATES, MOODS };

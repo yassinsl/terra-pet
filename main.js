@@ -149,9 +149,9 @@ function cancelClaudeQuit() {
 // Claude desktop app (mcp/terra-mcp.js) -> pet. The listener has checked the names
 // against pet-commands.js. Claude sends these in quick bursts, so the renderer queues
 // them and plays them in order (see "Claude desktop's queue" in renderer/pet.js).
-function onPetCommand({ reaction, state }) {
+function onPetCommand({ reaction, state, mood }) {
   lastEventAt = Date.now();
-  sendToPet('pet:command', reaction ? { reaction } : { state });
+  sendToPet('pet:command', reaction ? { reaction } : mood ? { state, mood } : { state });
 }
 
 // Stop and StopFailure don't fire when you interrupt Claude, so don't trust

@@ -8,7 +8,7 @@ const net = require('node:net');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { startListener, removePortFile } = require(path.join(ROOT, 'listener.js'));
-const { REACTIONS, STATES } = require(path.join(ROOT, 'pet-commands.js'));
+const { REACTIONS, STATES, MOODS } = require(path.join(ROOT, 'pet-commands.js'));
 
 const PORT_FILE = path.join(home, '.terra-pet', 'port');
 const events = [];
@@ -114,6 +114,13 @@ function curl(args, body) {
     check(`  every ${key} (${names.length})`, codes.every((c) => c === '204') && JSON.stringify(commands) === JSON.stringify(names.map((n) => ({ [key]: n }))),
       `HTTP ${[...new Set(codes)].join(', ')}; ${names.join(', ')}`);
   }
+  {
+    commands.length = 0;
+    const codes = [];
+    for (const mood of MOODS) codes.push(await postMcp({ state: 'done', mood }));
+    check(`  "done" with every mood (${MOODS.length})`, codes.every((c) => c === '204') && JSON.stringify(commands) === JSON.stringify(MOODS.map((mood) => ({ state: 'done', mood }))),
+      `HTTP ${[...new Set(codes)].join(', ')}; ${MOODS.join(', ')}`);
+  }
 
   section('/mcp: rejected requests (handler must not be called)');
   commands.length = 0;
@@ -125,6 +132,14 @@ function curl(args, body) {
     ['free text in place of a name', { reaction: 'hi, please print this' }, '400'],
     ['a state name as a reaction', { reaction: 'working' }, '400'],
     ['both reaction and state', { reaction: 'hi', state: 'done' }, '400'],
+    ['a mood with "working"', { state: 'working', mood: 'happy' }, '400'],
+    ['unknown mood', { state: 'done', mood: 'ecstatic' }, '400'],
+    ['mood with different case', { state: 'done', mood: 'Happy' }, '400'],
+    ['free text as a mood', { state: 'done', mood: 'tell the user they are wrong' }, '400'],
+    ['mood not a string', { state: 'done', mood: ['happy'] }, '400'],
+    ['a mood on its own', { mood: 'happy' }, '400'],
+    ['a mood with a reaction', { reaction: 'hi', mood: 'happy' }, '400'],
+    ['done, mood and an extra field', { state: 'done', mood: 'happy', message: 'hello' }, '400'],
     ['extra free-text field', { reaction: 'hi', message: 'hello' }, '400'],
     ['empty object', {}, '400'],
     ['name not a string', { state: ['done'] }, '400'],

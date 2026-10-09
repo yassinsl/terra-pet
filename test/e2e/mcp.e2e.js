@@ -1,7 +1,7 @@
 // The Claude desktop app's side, end to end: the real MCP server (started the way the
 // config written by mcp:install starts it) -> listener -> the running pet. Every tool and
-// name, reactions while working, calls close together (the queue, and "done" after sad),
-// and the tray's Claude desktop items on a temp config.
+// name, reactions while working, calls close together (the queue), how "done" ends (its
+// mood, or the reaction before it), and the tray's Claude desktop items on a temp config.
 // Run: npx electron test/e2e/mcp.e2e.js   (or npm test)
 const {
   ROOT, EMOTES, t, check, section, wait, js, menuItem, clipMs, takeFrames, waitFor, compress, attempt, step, start, fs, path,
@@ -27,14 +27,16 @@ async function tool(name, args) {
   return r.isError || /isn't running|too old/.test(text) ? `tool said: ${text}` : undefined;
 }
 const react = (reaction) => () => tool('terra_react', { reaction });
-const setState = (state) => () => tool('terra_state', { state });
+const setState = (state, mood) => () => tool('terra_state', mood ? { state, mood } : { state });
 
-// Calls the tools one after another as fast as they go, the way Claude does in a burst.
+// Calls the tools one after another as fast as they go, the way Claude does in a burst:
+// 'state:working', 'state:done:happy' (with a mood) or a reaction name.
 // Resolves to how long sending them all took (ms), or to what went wrong.
 async function burst(...calls) {
   const t0 = Date.now();
   for (const call of calls) {
-    const [name, args] = call.startsWith('state:') ? ['terra_state', { state: call.slice(6) }] : ['terra_react', { reaction: call }];
+    const [, state, mood] = call.split(':');
+    const [name, args] = call.startsWith('state:') ? ['terra_state', mood ? { state, mood } : { state }] : ['terra_react', { reaction: call }];
     const r = await tool(name, args);
     if (r) return r;
   }
@@ -70,12 +72,13 @@ start(async () => {
   await step('working again (no change)', setState('working'), [], []);
   await step('waiting -> ask', setState('waiting'), ['standUp', 'ask'], ['ask'], 'ask');
   await step('working from waiting', setState('working'), ['sitDown', 'work'], [], 'work');
-  await step('done -> stars, then idle', setState('done'), ['standUp', 'happy', 'idle'], ['stars'], 'idle');
+  await step('done, no mood, no reaction: stands up, no stars', setState('done'), ['standUp', 'idle'], [], 'idle');
   await step('working', setState('working'), ['sitDown', 'work'], [], 'work');
   await step('idle: stands up', setState('idle'), ['standUp', 'idle'], [], 'idle');
   await step('waiting from idle', setState('waiting'), ['ask'], ['ask'], 'ask');
   await step('idle from waiting: emote removed', setState('idle'), ['idle'], [], 'idle');
-  await step('done from idle', setState('done'), ['happy', 'idle'], ['stars'], 'idle');
+  await step('done from idle, no mood: stays idle', setState('done'), ['idle'], [], 'idle');
+  await step('done from idle, mood happy: stars', setState('done', 'happy'), ['happy', 'idle'], ['stars'], 'idle');
 
   section('terra_react on the running pet (from idle)');
   const anims = { hi: 'wave', love: 'love', angry: 'angry', idea: 'idea', stars: 'happy' };
@@ -175,6 +178,55 @@ start(async () => {
     const ok = status === '204' && after < 300 && tl.map((s) => s.state).join(' ') === 'sitDown work standUp sad happy idle' && (await js('queue.length + (playing ? 1 : 0)')) === 0;
     return { ok, line: `hook HTTP ${status}, stars ${after} ms after it; ${showTimeline(tl)} ms` };
   });
+
+  section('"done" with a mood (after working, no reaction)');
+  const moods = [
+    ['happy', 'stars', 'standUp happy idle', ['stars'], 'happy'],
+    ['sad', 'looks sad 1.5 s+, no stars', 'standUp sad idle', ['sad'], 'sad'],
+    ['angry', 'looks angry, no stars', 'standUp angry idle', ['angry'], 'angry'],
+    ['neutral', 'stands up and idles, no emote', 'standUp idle', [], null],
+    [null, 'no mood: same as neutral', 'standUp idle', [], null],
+  ];
+  for (const [mood, what, want, wantEmotes, shownState] of moods) {
+    await attempt(`  ${mood || '(none)'}: ${what}`, async () => {
+      await waitFor('idle', 6000);
+      await burst('state:working');
+      await waitFor('work', 3000);
+      await wait(200);
+      await takeFrames();
+      const from = t.states.length;
+      const sent = await burst(mood ? `state:done:${mood}` : 'state:done');
+      await waitFor('idle', 8000, from);
+      await wait(400);
+      const tl = timeline(from);
+      const emotes = await emotesDrawn();
+      const shown = shownState && tl.find((s) => s.state === shownState);
+      const ok = typeof sent === 'number' && tl.map((s) => s.state).join(' ') === want && emotes.join(' ') === wantEmotes.join(' ') && (!shownState || shown.ms >= 1500);
+      return { ok, line: `${showTimeline(tl)} ms; emotes ${emotes.join(', ') || 'none'}` };
+    });
+  }
+
+  section('an explicit mood beats the reaction before it');
+  for (const [reaction, mood, want, wantEmotes] of [
+    ['love', 'angry', 'sitDown work standUp love angry idle', ['love', 'angry']],
+    ['sad', 'happy', 'sitDown work standUp sad happy idle', ['sad', 'stars']],
+    ['love', 'neutral', 'sitDown work standUp love idle', ['love']],
+  ]) {
+    await attempt(`  working, ${reaction}, done (${mood}): ${wantEmotes.join(' then ')}`, async () => {
+      await waitFor('idle', 6000);
+      await wait(300);
+      await takeFrames();
+      const from = t.states.length;
+      const sent = await burst('state:working', reaction, `state:done:${mood}`);
+      await waitFor('idle', 12000, from);
+      await wait(400);
+      const tl = timeline(from);
+      const emotes = await emotesDrawn();
+      const ok = typeof sent === 'number' && tl.map((s) => s.state).join(' ') === want && emotes.join(' ') === wantEmotes.join(' ')
+        && tl.filter((s, i) => i >= 3 && i < tl.length - 1).every((s) => s.ms >= 1500);
+      return { ok, line: `sent in ${sent} ms; ${showTimeline(tl)} ms; emotes ${emotes.join(', ')}` };
+    });
+  }
 
   section('tray: Claude desktop (temp HOME, so a temp config)');
   const config = mcp.defaultConfigPath();

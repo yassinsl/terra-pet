@@ -1,15 +1,16 @@
 // Local HTTP listener. Bound to 127.0.0.1 only. Three routes:
 //   POST /event  { "event": string, "prompt"?: string }  Claude Code hook events (hooks/terra-hook.sh)
-//   POST /mcp    { "reaction": name } or { "state": name }  the Claude desktop app (mcp/terra-mcp.js)
+//   POST /mcp    { "reaction": name } or { "state": name }, or { "state": "done", "mood": name }
+//                the Claude desktop app (mcp/terra-mcp.js)
 //   POST /server { "action": "hello"|"bye"|"ping", "id": string }  that MCP server coming and
 //                going (answered with a small JSON status instead of 204)
 // Prompt text is passed to onEvent and never written to disk or logged. /mcp takes
-// nothing but one name from the fixed lists in pet-commands.js.
+// nothing but names from the fixed lists in pet-commands.js.
 const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const { REACTIONS, STATES } = require('./pet-commands.js');
+const { REACTIONS, STATES, MOODS } = require('./pet-commands.js');
 const { SESSION_ID } = require('./open-with-claude.js');
 
 const HOST = '127.0.0.1';
@@ -35,11 +36,17 @@ function hookEvent(body) {
 
 const COMMANDS = new Map([['reaction', REACTIONS], ['state', STATES]]);
 
-// Checks a parsed /mcp body: exactly one key, holding one of the known names.
-// (A Map, so keys such as "__proto__" or "toString" find nothing.)
+// Checks a parsed /mcp body: exactly one key, holding one of the known names, or
+// "state": "done" with a "mood" from MOODS beside it. (A Map, so keys such as "__proto__"
+// or "toString" find nothing.)
 function petCommand(body) {
   const keys = Object.keys(body);
-  if (keys.length !== 1 || !COMMANDS.has(keys[0])) return { error: 'expected exactly one of "reaction" or "state"' };
+  if (keys.length === 2 && keys.includes('state') && keys.includes('mood')) {
+    if (body.state !== 'done') return { error: 'a mood goes with "done" only' };
+    if (!MOODS.includes(body.mood)) return { error: 'unknown mood' };
+    return { value: { state: 'done', mood: body.mood } };
+  }
+  if (keys.length !== 1 || !COMMANDS.has(keys[0])) return { error: 'expected exactly one of "reaction" or "state" (and "mood" with "done")' };
   const [key] = keys;
   if (!COMMANDS.get(key).includes(body[key])) return { error: `unknown ${key}` };
   return { value: { [key]: body[key] } };

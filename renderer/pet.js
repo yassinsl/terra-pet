@@ -337,23 +337,26 @@ function playReaction(name, { then = null } = {}) {
 const QUEUE_MAX = 5;                    // waiting commands; beyond that the oldest waiting ones go
 const MIN_SHOWN = 1500;                 // ms a queued reaction stays on screen, at least
 const LOOP_ALONE = 4000;                // ms a looping reaction plays when nothing waits after it
-const GLUM = new Set(['sad', 'angry']); // "done" after one of these doesn't celebrate
+const GLUM = new Set(['sad', 'angry']); // "done" after one of these, with no mood, doesn't celebrate
 
-let queue = [];           // waiting commands, oldest first: { reaction } or { state, celebrate }
+let queue = [];           // waiting commands, oldest first: { reaction } or { state, ending }
 let playing = null;       // the queued reaction on screen (see startReaction)
 let mood = null;          // the last reaction since the last "working" or "done", as they arrive
 let replyWorking = false; // "working" has played, and no done, waiting or idle since
 
 // A command from Claude desktop (main.js passes it on; the listener has checked the names).
-// The mood is taken as commands arrive, so a "done" knows what came before it even if
-// that reaction was dropped from a full queue.
-function queueCommand({ reaction, state: name } = {}) {
+// How a "done" ends is settled as it arrives, so it knows what came before it even if
+// that reaction was dropped from a full queue: the mood Claude gave it (happy, sad, angry
+// or neutral) or, with none, the last reaction in this reply (sad or angry: neutral, any
+// other: happy), or neutral when there was none either.
+function queueCommand({ reaction, state: name, mood: doneMood } = {}) {
   let command;
   if (reaction && EMOTES[reaction]) {
     mood = reaction;
     command = { reaction };
   } else if (name === 'done') {
-    command = { state: 'done', celebrate: !GLUM.has(mood) };
+    const fromReaction = mood && !GLUM.has(mood) ? 'happy' : 'neutral';
+    command = { state: 'done', ending: doneMood || fromReaction };
     mood = null;
   } else if (name === 'working' || name === 'waiting' || name === 'idle') {
     if (name === 'working') mood = null;
@@ -363,30 +366,35 @@ function queueCommand({ reaction, state: name } = {}) {
   }
   queue.push(command);
   if (queue.length > QUEUE_MAX) queue.splice(0, queue.length - QUEUE_MAX);
-  runQueue(performance.now());
+  runQueue(0);
 }
 
 // Free for the next command: not in the middle of something that ends by itself (a
 // one-shot animation such as a hook's stars or a click's love, sitting down, standing up).
 const petFree = () => ANIMATIONS[state] !== undefined && ANIMATIONS[state].loop === true;
 
-// Runs every frame, and when a command arrives.
-function runQueue(now) {
+// Runs every frame (dt: ms since the last one), and when a command arrives (dt 0).
+// Time on screen is counted on the animation clock, like the emote cycles, so a page
+// that stalls or is throttled doesn't count frozen time as seen.
+function runQueue(dt) {
   if (playing) {
     const p = playing;
-    if (p.since === null) {
+    if (p.shown === null) {
       if (state === 'standUp') return; // still standing up to it
       if (state !== p.anim) { // went somewhere else instead: let it go
         playing = null;
         return;
       }
-      p.since = now;
+      p.shown = 0;
+    } else {
+      p.shown += dt;
     }
-    const shown = now - p.since;
+    const { shown } = p;
     let over;
     if (p.loop) {
-      // At the end of an emote cycle: on to what waits, or back after LOOP_ALONE.
-      over = p.cycleEnded && (queue.length ? shown >= MIN_SHOWN : !p.stays && shown >= LOOP_ALONE);
+      // At the end of an emote cycle: on to what waits (or, played once, on to `back`),
+      // or back after LOOP_ALONE.
+      over = p.cycleEnded && (queue.length || p.once ? shown >= MIN_SHOWN : !p.stays && shown >= LOOP_ALONE);
       p.cycleEnded = false;
     } else {
       over = p.ended && shown >= MIN_SHOWN; // holds its last frame until then
@@ -416,8 +424,9 @@ function startCommand(command) {
       break;
     case 'done':
       replyWorking = false;
-      if (command.celebrate) startReaction('stars', { back: 'idle' });
-      else setState('idle'); // after sad or angry: just stand up (if working) and idle
+      if (command.ending === 'happy') startReaction('stars', { back: 'idle' });
+      else if (command.ending === 'sad' || command.ending === 'angry') startReaction(command.ending, { back: 'idle', once: true });
+      else setState('idle'); // neutral: just stand up (if working) and idle
       break;
     case 'idle':
       replyWorking = false;
@@ -428,12 +437,14 @@ function startCommand(command) {
 
 // From the laptop a reaction plays standing up, then Terra sits back down unless the
 // reply is over (or something else waits: then that plays next).
-function startReaction(name, { stays = false, back = null } = {}) {
+// `once`: a looping one (sad) moves on to `back` after MIN_SHOWN, at the end of a cycle.
+function startReaction(name, { stays = false, once = false, back = null } = {}) {
   const def = EMOTES[name];
   const then = back || (replyWorking || state === 'work' ? 'sitDown' : 'idle');
-  playing = { name, anim: def.anim, loop: !!def.loop, stays, back: then, since: null, ended: false, cycleEnded: false };
+  // shown: ms on screen so far, null until the pet is in the reaction (it may stand up first)
+  playing = { name, anim: def.anim, loop: !!def.loop, stays, once, back: then, shown: null, ended: false, cycleEnded: false };
   playReaction(name, { then: def.loop ? null : then });
-  if (state === def.anim) playing.since = performance.now();
+  if (state === def.anim) playing.shown = 0;
 }
 
 // A hook, the tray or a click changes the pet at once; a queued reaction on screen
@@ -629,7 +640,7 @@ function tick() {
   if (scale * devicePixelRatio !== px) applyScale(scale);
   advance(dt);
   advanceEmote(dt);
-  runQueue(now);
+  runQueue(dt);
   updateWalk(dt);
   updateIdle(now);
   draw();
