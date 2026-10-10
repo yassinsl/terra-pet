@@ -37,7 +37,8 @@ const names = (list) => list.map((s) => s[1]);
 
 start(async () => {
   // The fake player: records what the page asks for, plays nothing.
-  await js('window.__sounds = []; soundPlayer = { play: (name, volume) => window.__sounds.push([Math.round(performance.now()), name, volume]) }; true');
+  // (The real one is kept for the last two checks.)
+  await js('window.__realPlayer = soundPlayer; window.__sounds = []; soundPlayer = { play: (name, volume) => window.__sounds.push([Math.round(performance.now()), name, volume]) }; true');
   menuItem('Patrol').click(); // keep the pet still while testing
   await waitFor('idle', 4000);
 
@@ -197,18 +198,27 @@ start(async () => {
     check(`  never the same sound over itself, never more than 2 at once (${sorted.length} sounds)`, selfOverlap === 0 && most <= 2 && sorted.length >= 30, `at most ${most} at once, ${selfOverlap} overlapping themselves`);
   }
 
-  section('a real sound: no focus taken, no Dock icon');
+  section('the real player');
   {
-    const realPlayed = await js(`(async () => {
-      const a = new Audio('../Bot/sounds/pop.wav');
-      a.volume = 0; // heard by nobody
-      await a.play();
-      await new Promise((r) => setTimeout(r, 200));
-      return { ended: a.ended || a.currentTime > 0, error: a.error && a.error.code };
-    })()`);
+    const logged = [];
+    const realError = console.error;
+    console.error = (...args) => {
+      logged.push(args.join(' '));
+      realError(...args);
+    };
+    const results = await js("Promise.all([__realPlayer.play('no-such-sound', 0), __realPlayer.play('no-such-sound', 0)])");
+    await wait(300);
+    console.error = realError;
+    const lines = logged.filter((l) => l.startsWith('Terra: a sound effect could not play'));
+    check('  a sound that cannot play: refused, and logged once (not twice)', results.every((r) => r.played === false && r.error) && lines.length === 1,
+      `${results[0].error}; logged: ${lines[0] || 'nothing'}`);
+    t.consoleLog = t.consoleLog.filter((m) => !/no-such-sound/.test(m.message)); // the page's own note about the missing file
+  }
+  {
+    const played = await js("__realPlayer.play('pop', 0)"); // muted: heard by nobody
     await wait(200);
     const dock = app.dock ? app.dock.isVisible() : false;
-    check('  pop.wav played (muted) from the page: Terra not focused, no Dock icon', realPlayed.ended && !realPlayed.error && !dock && !t.win.isFocused() && BrowserWindow.getFocusedWindow() === null,
-      `played ${realPlayed.ended}, Dock icon ${dock}, focused window ${BrowserWindow.getFocusedWindow() ? 'yes' : 'none'}`);
+    check('  pop.wav through the real player (muted): play() resolves, Terra not focused, no Dock icon', played.played === true && !dock && !t.win.isFocused() && BrowserWindow.getFocusedWindow() === null,
+      `${JSON.stringify(played)}, Dock icon ${dock}, focused window ${BrowserWindow.getFocusedWindow() ? 'yes' : 'none'}`);
   }
 });

@@ -31,6 +31,7 @@ const SUITES = [
   ['e2e', ELECTRON, 'test/e2e/mcp.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/bubble.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/sound.e2e.js'],
+  ['e2e', process.execPath, 'test/e2e/sound-real.test.js'],
   ['e2e', ELECTRON, 'test/e2e/claude-lifecycle.e2e.js'],
   ['e2e', process.execPath, 'test/e2e/open-with-claude.test.js'],
 ];

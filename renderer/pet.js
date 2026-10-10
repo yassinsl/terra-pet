@@ -626,17 +626,37 @@ function onClick() {
 // ---- Sound effects (rules in sounds.js; settings from the tray's Sound menu) ----
 
 const audio = {}; // name -> HTMLAudioElement, made the first time it plays
+let soundProblemReported = false;
 // What makes the noise: an audio element per sound, in this page (so Terra never takes
-// focus or shows in the Dock to play one). The tests put a fake player here.
+// focus or shows in the Dock to play one). Resolves to { played } and, when play() was
+// refused, why; the first refusal also goes to main.js's log. The tests put a fake here.
 let soundPlayer = {
   play(name, volume) {
     if (!audio[name]) audio[name] = new Audio(`../Bot/sounds/${name}.wav`);
     const a = audio[name];
     a.volume = volume;
     a.currentTime = 0;
-    a.play().catch(() => {}); // a sound that can't play is just not heard
+    return a.play().then(() => ({ played: true }), (err) => {
+      const error = `${err.name}: ${err.message}`;
+      if (!soundProblemReported) {
+        soundProblemReported = true;
+        window.terra.reportSoundProblem(`${name}: ${error}`);
+      }
+      return { played: false, error };
+    });
   },
 };
+
+// For `Terra --check-sound` and the tests: one sound through the real player, past the
+// mixer's rules; resolves to whether play() went through, with the file it played.
+async function checkSound(name, volume) {
+  const result = await soundPlayer.play(name, volume);
+  const a = audio[name];
+  const src = decodeURI(a.src);
+  // From app.asar/ in the packaged app, else from the project folder.
+  const file = src.includes('/app.asar/') ? src.slice(src.indexOf('app.asar/')) : src.replace(/^.*\/([^/]+\/Bot\/)/, '$1');
+  return { ...result, sound: name, file, duration: a.duration };
+}
 const sound = createMixer({ player: { play: (name, volume) => soundPlayer.play(name, volume) }, quiet: () => hidden || state === 'sleep' });
 
 // The speech bubble (bubble-window.js, through main.js): a pop when it appears, then talk

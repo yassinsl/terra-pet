@@ -276,6 +276,19 @@ over itself, at most 2 play at once, and Terra stays silent while it is hidden o
 The sounds play from Terra's own window, so it never takes focus or shows in the Dock. Your
 choices are remembered.
 
+Hearing nothing? Open Terra's menu and check **Sound > Sound effects** is ticked (while the
+end-to-end tests run, a second Terra with its own menu bar icon is there too; its settings
+aren't yours). To check the sound itself, run
+
+```sh
+/Applications/Terra.app/Contents/MacOS/Terra --check-sound
+```
+
+which plays Terra's hi at Low volume, the same way the pet does, and prints whether it
+played (`"played":true`); it runs next to an open Terra without disturbing it. When Terra
+runs from a terminal, it also says where its sound files are at startup, and the first
+sound that fails to play.
+
 ## Make your own skin or animation
 
 All the art is in [`Bot/`](Bot):
@@ -350,8 +363,8 @@ npm run dist      # build dist/Terra-<version>-arm64.dmg and -x64.dmg
 npm run icons     # redraw the app and menu bar icons from the sprite sheet
 ```
 
-The end-to-end tests run the real app: a second Terra appears and moves around for a few
-minutes. Leave it alone and keep the screen on. They use temporary folders, so they never
+The end-to-end tests run the real app: a second Terra (with a second menu bar icon) appears
+and moves around for a few minutes. Leave it alone and keep the screen on. They use temporary folders, so they never
 touch your settings, your saved spot, or a Terra you are running.
 
 ### Build the app

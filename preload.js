@@ -16,4 +16,5 @@ contextBridge.exposeInMainWorld('terra', {
   onBubbleEnded: (callback) => ipcRenderer.on('pet:bubble-ended', (_event, id) => callback(id)),
   onBubblePhase: (callback) => ipcRenderer.on('pet:bubble-phase', (_event, change) => callback(change)),
   onSoundSettings: (callback) => ipcRenderer.on('pet:sound-settings', (_event, settings) => callback(settings)),
+  reportSoundProblem: (problem) => ipcRenderer.send('pet:sound-problem', problem),
 });
