@@ -11,10 +11,13 @@ section('text: plain, capital letters, only what the font has');
 for (const [label, raw, want] of [
   ['upper case', 'Tokyo!', 'TOKYO!'],
   ['line breaks and tabs become spaces', 'Hi\nthere\tyou\r\nall', 'HI THERE YOU ALL'],
-  ['control characters go', 'A\u0000B\u0007C\u001b[31mD\u007f', 'ABC31MD'],
+  ['control characters go', 'A\u0000B\u0007C\u001b[31mD\u007f', 'ABC[31MD'],
   ['zero-width and direction overrides go', 'pay​pal ‮evil‬', 'PAYPAL EVIL'],
   ['accents come off', 'Café crème, déjà vu', 'CAFE CREME, DEJA VU'],
-  ['characters the font lacks are skipped', 'a<b>c&d="e";_f*g#h', 'ABCDEFGH'],
+  ['full-width and other compatibility forms: their plain letter', '２ ＡＢＣ ﬁne', '2 ABC FINE'],
+  ['the signs the updated font has stay', 'a<b>c&d="e";_f*g#h 100% @ $5 [x]', 'A<B>C&D="E";_F*G#H 100% @ $5 [X]'],
+  ['other characters become spaces, not nothing', '3×4≠13 ok✓done', '3 4 13 OK DONE'],
+  ['≠ is a space, never = (its accent-like slash is not stripped off)', '2 ≠ 3', '2 3'],
   ['emoji only: nothing', '😀 🎉', ''],
   ['spaces collapse and trim', '   lots    of   space   ', 'LOTS OF SPACE'],
   ['not a string: nothing', 42, ''],
@@ -43,6 +46,14 @@ for (const [label, reply, want] of [
 {
   const long = b.layoutBubble(b.firstSentence('Refactored the authentication module so that sessions expire after thirty minutes. Then more.'));
   check('  a long first sentence: the bubble trims it to 2 lines', long.lines.length === 2 && long.trimmed && long.lines[1].endsWith('...'), long.lines.join(' / '));
+}
+
+section('"2 + 2 = 4": every character drawn');
+{
+  const l = b.layoutBubble('2 + 2 = 4');
+  const drawn = l.glyphs.map((g) => Object.keys(b.FONT.glyphs).find((ch) => b.FONT.glyphs[ch].x === g.sx)).join('');
+  check('  5 glyphs: 2 + 2 = 4, each from its place on the sheet', l.lines.join() === '2 + 2 = 4' && drawn === '2+2=4' && l.glyphs.length === 5, `${l.lines.join(' / ')}: ${drawn}`);
+  check('  the font has 61 characters, A-Z and 0-9 among them', Object.keys(b.FONT.glyphs).length === 61 && b.SIGNS.join(' ') === ': - + ( ) / = * % # @ & " < > _ ; [ ] $ ! ? , . \'', b.SIGNS.join(' '));
 }
 
 section('lines: 2 at most, about 20 characters each, then "..."');

@@ -257,8 +257,9 @@ left side would go off screen):
 The
 bubble pops in, stays 4 seconds plus 50 ms a character (10 s at most) and fades out; a click
 on it dismisses it, and a new one replaces it. It fits 2 lines of about 20 characters, in
-capital letters, A-Z, 0-9 and `. , ! ? : ' - + ( ) /`; longer text ends with `...` and other
-characters are left out. Claude is told to use it only for short answers and friendly
+capital letters with A-Z, 0-9 and ``: - + ( ) / = * % # @ & " < > _ ; [ ] $ ! ? , . '``;
+letters lose their accents (é is E), any other character shows as a space, and longer text
+ends with `...`. Claude is told to use it only for short answers and friendly
 remarks, never for code, lists, long explanations or anything sensitive. **Speech bubbles**
 in the menu turns all of this off.
 
@@ -274,7 +275,9 @@ All the art is in [`Bot/`](Bot):
   on that canvas, so an emote is drawn in the space above and around it.
 - **`Bot/bubble/`**: the speech bubble (a 9-slice body, tails, pop-in frames and a 5x7
   pixel font), copied from [`design/terra-bubble-assets/`](design/terra-bubble-assets),
-  which also has the reference pictures and the finished bubbles the tests compare against.
+  which also has the reference pictures and the finished bubbles the tests compare against;
+  the font is the larger one (61 characters) from
+  [`design/terra-font-update/`](design/terra-font-update).
 
 To add an animation, give it a free row on the sheet and add a line to
 [`renderer/animations.js`](renderer/animations.js):

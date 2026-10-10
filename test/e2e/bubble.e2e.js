@@ -79,6 +79,13 @@ async function petAt(x) {
 start(async () => {
   bubbleWin = BrowserWindow.getAllWindows().find((w) => w !== t.win && /bubble\.html$/.test(w.webContents.getURL()));
   const wa = screen.getDisplayMatching(t.win.getBounds()).workArea;
+  // Every phase main.js sends the bubble page, with the time it sent it (its timers decide).
+  const sentPhases = [];
+  const realSend = bubbleWin.webContents.send.bind(bubbleWin.webContents);
+  bubbleWin.webContents.send = (channel, state, ...rest) => {
+    if (channel === 'bubble:draw') sentPhases.push({ t: Date.now(), phase: state.phase, glyphs: state.glyphs ? state.glyphs.length : 0 });
+    return realSend(channel, state, ...rest);
+  };
   menuItem('Patrol').click(); // keep the pet still while testing
   await waitFor('idle', 4000);
 
@@ -172,6 +179,28 @@ start(async () => {
   }
   await quiet();
   {
+    // Every character drawn, each glyph pixel for pixel from the font sheet (ink, or the fill).
+    const status = await say('2 + 2 = 4');
+    await waitPhase('full');
+    const f = await frame1x();
+    const glyphs = await bjs('current.glyphs');
+    const sheet = rgbaOf(nativeImage.createFromPath(path.join(ROOT, 'Bot', 'bubble', 'font-5x7.png')));
+    const chars = glyphs.map((g) => Object.keys(FONT.glyphs).find((ch) => FONT.glyphs[ch].x === g.sx)).join('');
+    let off = 0;
+    for (const g of glyphs) {
+      for (let y = 0; y < g.h; y++) {
+        for (let x = 0; x < g.w; x++) {
+          const ink = sheet.data[((g.sy + y) * sheet.width + g.sx + x) * 4 + 3] > 0;
+          const i = ((g.y + y) * f.width + g.x + x) * 4;
+          const rgb = Array.from(f.data.subarray(i, i + 3)).map((v) => v.toString(16).padStart(2, '0')).join('');
+          if (rgb !== (ink ? '231627' : 'fff4dc')) off++;
+        }
+      }
+    }
+    check('"2 + 2 = 4": all 5 characters drawn, = included', status === 204 && chars === '2+2=4' && off === 0, `HTTP ${status}; glyphs ${chars}; ${off} glyph pixels off the font sheet`);
+  }
+  await quiet();
+  {
     const html = '<img src=x onerror="window.pwned=1"><b>Hi</b> & <script>window.pwned=2</script>';
     const status = await say(html);
     await waitPhase('full');
@@ -229,26 +258,22 @@ start(async () => {
     await quiet();
     const text = 'Tokyo!';
     const hold = layoutBubble(text).holdMs;
-    const seen = [];
-    let last = null;
-    let popFrame = null;
+    const from = sentPhases.length;
     const t0 = Date.now();
     await say(text);
-    while (Date.now() - t0 < hold + 1500) {
-      const p = await phase();
-      if (p !== last && (seen.length || p !== 'hidden')) { // from the first frame shown
-        seen.push([p, Date.now() - t0]);
-        last = p;
-      }
-      if (p === 'pop' && !popFrame) popFrame = await frame1x();
-      if (p === 'hidden' && seen.length > 1) break;
-      await wait(5);
-    }
+    const end = Date.now() + hold + 2000;
+    const done = () => sentPhases.slice(from).some((x, i, a) => x.phase === 'hidden' && a.slice(0, i).some((y) => y.phase === 'pop'));
+    while (!done() && Date.now() < end) await wait(20);
+    const seen = sentPhases.slice(from).filter((x, i, a) => i === 0 || x.phase !== a[i - 1].phase).map((x) => [x.phase, x.t - t0]);
     const at = Object.fromEntries(seen.map(([p, ms]) => [p, ms]));
     const popMs = at.full - at.pop;
     const holdMs = at.fade - at.full;
     const fadeMs = at.hidden - at.fade;
-    // The pop-in frame: pop-in-right.png with its tip on the full bubble's tip.
+    // The pop-in frame, as the page puts it together: pop-in-right.png with its tip on the
+    // full bubble's tip.
+    await say(text);
+    await waitPhase('full');
+    const popFrame = await bjs("(() => { const f = compose(current, 'pop'); return { width: f.width, height: f.height, data: Array.from(f.data) }; })()").then((f) => ({ ...f, data: Uint8Array.from(f.data) }));
     let popOk = false;
     if (popFrame) {
       const pop = rgbaOf(nativeImage.createFromPath(path.join(ROOT, 'Bot', 'bubble', 'pop-in-right.png')));
@@ -256,8 +281,8 @@ start(async () => {
       for (let y = 0; y < pop.height; y++) want.data.set(pop.data.subarray(y * pop.width * 4, (y + 1) * pop.width * 4), ((y + 6) * popFrame.width + 27) * 4);
       popOk = differ(popFrame, want) === 0;
     }
-    const ok = seen.map(([p]) => p).join(' ') === 'pop full fade hidden' && Math.abs(popMs - TIMING.popMs) <= 40 && Math.abs(holdMs - hold) <= 80 && Math.abs(fadeMs - TIMING.fadeMs) <= 60 && popOk;
-    return { ok, line: `${seen.map(([p, ms]) => `${p} at ${ms}`).join(', ')} ms: pop ${popMs}, hold ${holdMs} (want ${hold}), fade ${fadeMs}; pop-in frame ${popFrame ? (popOk ? 'matches pop-in-right.png' : 'differs') : 'not seen'}` };
+    const ok = seen.map(([p]) => p).join(' ') === 'pop full fade hidden' && Math.abs(popMs - TIMING.popMs) <= 20 && Math.abs(holdMs - hold) <= 40 && Math.abs(fadeMs - TIMING.fadeMs) <= 20 && popOk;
+    return { ok, line: `sent ${seen.map(([p, ms]) => `${p} at ${ms}`).join(', ')} ms: pop ${popMs}, hold ${holdMs} (want ${hold}), fade ${fadeMs}; pop-in frame ${popOk ? 'matches pop-in-right.png' : 'differs'}` };
   });
   check('  a longer text holds longer: 2 lines', layoutBubble('Paris is the capital of France!').holdMs === 4000 + 50 * 30, `${layoutBubble('Paris is the capital of France!').holdMs} ms`);
 
@@ -348,19 +373,16 @@ start(async () => {
   }
 
   section('"done" with say (Claude desktop)');
-  // Every new bubble starts with its pop-in frame: count those, with what they say.
-  const pops = [];
-  const realSend = bubbleWin.webContents.send.bind(bubbleWin.webContents);
-  bubbleWin.webContents.send = (channel, state, ...rest) => {
-    if (channel === 'bubble:draw' && state.phase === 'pop') pops.push(state.glyphs.length);
-    return realSend(channel, state, ...rest);
-  };
+  // Every new bubble starts with its pop-in frame: count those (in what main.js sent).
+  let popsFrom = 0;
+  const resetPops = () => { popsFrom = sentPhases.length; };
+  const popCount = () => sentPhases.slice(popsFrom).filter((x) => x.phase === 'pop').length;
   const port = () => fs.readFileSync(path.join(process.env.HOME, '.terra-pet', 'port'), 'utf8').trim();
   const mcp = (body) => fetch(`http://127.0.0.1:${port()}/mcp`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const chain = (list) => list.map((x) => x.state).filter((x, i, a) => i === 0 || x !== a[i - 1]).join(' ');
   await quiet();
   {
-    pops.length = 0;
+    resetPops();
     const from = t.states.length;
     await mcp({ state: 'working' });
     await mcp({ state: 'done', mood: 'happy', say: 'TOKYO!' });
@@ -370,20 +392,20 @@ start(async () => {
     const want = rgbaOf(nativeImage.createFromPath(path.join(EXAMPLES, 'examples-1x', 'tokyo.png')));
     await waitFor('idle', 4000, from);
     const states = chain(t.states.slice(from));
-    check('  working, done (happy, say "Tokyo!"): the bubble shows while Terra celebrates, then idle', during.phase === 'full' && differ(during.frame, want) === 0 && states === 'sitDown work standUp happy idle' && pops.length === 1,
+    check('  working, done (happy, say "Tokyo!"): the bubble shows while Terra celebrates, then idle', during.phase === 'full' && differ(during.frame, want) === 0 && states === 'sitDown work standUp happy idle' && popCount() === 1,
       `${states}; bubble ${during.phase}, ${differ(during.frame, want)} pixels off tokyo.png`);
   }
   await quiet();
   {
-    pops.length = 0;
+    resetPops();
     const from = t.states.length;
     await mcp({ state: 'working' });
     await say('Tokyo!');
     await mcp({ state: 'done', mood: 'happy', say: 'TOKYO!' });
     await waitFor('happy', 12000, from);
     await quiet();
-    const one = pops.length;
-    pops.length = 0;
+    const one = popCount();
+    resetPops();
     await mcp({ state: 'working' });
     await say('Tokyo!');
     await mcp({ state: 'done', mood: 'neutral', say: 'Paris!' });
@@ -391,13 +413,13 @@ start(async () => {
     await wait(300);
     await waitPhase('hidden', 8000);
     await quiet();
-    const two = pops.length;
-    pops.length = 0;
+    const two = popCount();
+    resetPops();
     await mcp({ state: 'working' });
     await mcp({ state: 'done', mood: 'neutral', say: 'TOKYO!' });
     await waitPhase('full');
     await quiet();
-    const next = pops.length;
+    const next = popCount();
     check('  no duplicate: terra_say "Tokyo!" then done with the same line shows one bubble', one === 1 && two === 2 && next === 1,
       `same line: ${one} bubble(s); different lines: ${two}; the same line in the next reply: ${next}`);
   }
@@ -414,7 +436,7 @@ start(async () => {
   });
   await quiet();
   {
-    pops.length = 0;
+    resetPops();
     const from = t.states.length;
     const reply = `\`\`\`js\nconst secret = "${PROMPT_MARK}";\n\`\`\`\nAll tests pass! I also cleaned up the ${PROMPT_MARK} config.`;
     await runHook(stopInput(reply));
@@ -422,21 +444,21 @@ start(async () => {
     const glyphs = await bjs('current.glyphs.length');
     const want = layoutBubble('All tests pass!');
     const stars = await waitFor('happy', 3000, from);
-    check('  fake Stop input: code block skipped, "All tests pass!" in the bubble, Terra still celebrates', glyphs === want.glyphs.length && stars && pops.length === 1,
+    check('  fake Stop input: code block skipped, "All tests pass!" in the bubble, Terra still celebrates', glyphs === want.glyphs.length && stars && popCount() === 1,
       `${glyphs} glyphs (want ${want.glyphs.length}: ${want.lines.join(' / ')}), stars ${stars}`);
   }
   await quiet();
   {
-    pops.length = 0;
+    resetPops();
     const from = t.states.length;
     await runHook(stopInput('```\nnpm test\n```'));
     const stars = await waitFor('happy', 3000, from);
     await wait(300);
-    check('  a reply that is only code: stars, no bubble', stars && pops.length === 0 && (await phase()) === 'hidden', `${pops.length} bubbles`);
+    check('  a reply that is only code: stars, no bubble', stars && popCount() === 0 && (await phase()) === 'hidden', `${popCount()} bubbles`);
   }
   await quiet();
   {
-    pops.length = 0;
+    resetPops();
     menuItem('Speech bubbles').click(); // off
     const from = t.states.length;
     await runHook(stopInput('All tests pass!'));
@@ -445,7 +467,7 @@ start(async () => {
     await waitFor('idle', 8000, from + 3);
     await wait(300);
     menuItem('Speech bubbles').click(); // on again
-    check('  Speech bubbles off: no bubble from the hook or from done, the pet as usual', pops.length === 0 && chain(t.states.slice(from)).includes('happy'), `${pops.length} bubbles; ${chain(t.states.slice(from))}`);
+    check('  Speech bubbles off: no bubble from the hook or from done, the pet as usual', popCount() === 0 && chain(t.states.slice(from)).includes('happy'), `${popCount()} bubbles; ${chain(t.states.slice(from))}`);
   }
 
   section('privacy');

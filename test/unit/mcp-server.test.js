@@ -17,6 +17,7 @@ const { Client } = require('@modelcontextprotocol/client');
 const { StdioClientTransport } = require('@modelcontextprotocol/client/stdio');
 const { startListener, removePortFile } = require(path.join(ROOT, 'listener.js'));
 const { REACTIONS, STATES, MOODS } = require(path.join(ROOT, 'pet-commands.js'));
+const { FONT } = require(path.join(ROOT, 'bubble-layout.js'));
 const EMOTES = require(path.join(ROOT, 'renderer', 'emotes.js'));
 const { terraEntry } = require(path.join(ROOT, 'mcp-installer.js'));
 
@@ -161,6 +162,9 @@ function rawSession() {
     check('description: short answers and friendly remarks, with the examples', /short, simple answers and friendly remarks/.test(d) && d.includes('"Paris is the capital of France!"') && d.includes('"Happy to help!"'));
     check('  not for code, lists, long explanations or anything sensitive; once per reply', /Do not use it for code, lists, long explanations or anything sensitive/.test(d) && /At most once per reply/.test(d));
     check('  says what fits: 2 lines of about 20 characters, cut with "..."', /2 lines of about 20 characters each; longer text is cut with "\.\.\."/.test(d));
+    const list = 'A-Z, 0-9 and : - + ( ) / = * % # @ & " < > _ ; [ ] $ ! ? , . \'';
+    check('  terra_say and done\'s say list the font\'s characters (61, from the font file)', d.includes(list) && state.inputSchema.properties.say.description.includes(list)
+      && /letters lose their accents \(é is E\) and any other character shows as a space/.test(d), list);
     check('server instructions: terra_say only for an extra line, the answer goes in done\'s say', /terra_say is only for an extra line during a reply \(at most once; never for code, lists, long explanations or anything sensitive\); the answer itself goes in done's say/.test(instructions.replace(/\s+/g, ' ')));
     const call = (text) => client.callTool({ name: 'terra_say', arguments: { text } });
     said.length = 0;
@@ -171,7 +175,8 @@ function rawSession() {
     check('  long text: cut to fit, and Claude is asked to keep it shorter', !r.isError && /JUMPS OVER THE\.\.\."/.test(textOf(r)) && /keep it shorter next time/.test(textOf(r)) && said.length === 1, `"${textOf(r)}"`);
     said.length = 0;
     r = await call('<b>Hi</b> <script>alert(1)</script>\u0007\u202e');
-    check('  HTML and control characters: only plain glyphs are sent', !r.isError && said.length === 1 && /^[A-Z0-9 .,!?:'+()\/-]+$/.test(said[0]) && !/[<>\u0007\u202e]/.test(said[0]), JSON.stringify(said[0]));
+    check('  HTML and control characters: only glyphs the font has, shown as text', !r.isError && said.length === 1 && Array.from(said[0]).every((ch) => ch === ' ' || Object.hasOwn(FONT.glyphs, ch))
+      && !/[\u0007\u202e]/.test(said[0]) && said[0] === '<B>HI</B> <SCRIPT>ALERT(1)</SCRIPT>', JSON.stringify(said[0]));
     said.length = 0;
     r = await call('😀🎉');
     check('  nothing drawable: not sent, Claude is told why', !r.isError && said.length === 0 && /Nothing to show/.test(textOf(r)), `"${textOf(r)}"`);

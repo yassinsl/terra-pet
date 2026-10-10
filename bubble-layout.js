@@ -29,22 +29,29 @@ const ANCHOR = { right: (width) => 32 - width, left: () => 36, top: (height) => 
 // How long a bubble of `chars` characters is held, between its pop-in and its fade.
 const holdFor = (chars) => Math.min(TIMING.holdMs + TIMING.perCharMs * chars, TIMING.maxHoldMs);
 
+// The signs the font has besides A-Z and 0-9, in sheet order (for the tool descriptions).
+const SIGNS = Object.keys(FONT.glyphs).filter((ch) => !/[A-Z0-9]/.test(ch));
+
 // Plain text the font can draw: line breaks and other spaces become one space, control
-// and format characters (zero-width, direction overrides) go, letters are made capital,
-// accents come off (É is E plus an accent the font doesn't have), and anything else the
-// font doesn't have is skipped.
+// and format characters (zero-width, direction overrides) go, and letters are made
+// capital. A character the font doesn't have becomes its plain letters or digits when
+// that is what it is (é is E, a full-width ２ is 2, ﬁ is FI), and otherwise a space, so
+// "2 × 3" keeps its gap and "≠" never turns into "=". Runs of spaces become one.
 function cleanText(raw) {
   if (typeof raw !== 'string') return '';
-  return raw.slice(0, MAX_INPUT)
-    .normalize('NFD')
+  const text = raw.slice(0, MAX_INPUT)
     .replace(/\s/gu, ' ')
     .replace(/[\p{Cc}\p{Cf}]/gu, '')
-    .toUpperCase()
-    .split('')
-    .filter((ch) => ch === ' ' || Object.hasOwn(FONT.glyphs, ch))
-    .join('')
-    .replace(/ +/g, ' ')
-    .trim();
+    .normalize('NFC')
+    .toUpperCase();
+  const known = (ch) => ch === ' ' || Object.hasOwn(FONT.glyphs, ch);
+  const plain = (ch) => {
+    if (known(ch)) return ch;
+    if (/\p{M}/u.test(ch)) return ''; // an accent on its own
+    const base = ch.normalize('NFKD').replace(/\p{M}/gu, '').toUpperCase();
+    return /^[\p{L}\p{N}]+$/u.test(base) && Array.from(base).every(known) ? base : ' ';
+  };
+  return Array.from(text, plain).join('').replace(/ +/g, ' ').trim();
 }
 
 // The first sentence of a reply from Claude (the Claude Code Stop hook's
@@ -151,5 +158,5 @@ function placeBubble(layout, petBounds, scale, workArea) {
 }
 
 module.exports = {
-  FONT, MAX_INPUT, MAX_LINES, LINE_CHARS, TAIL_HEIGHT, TIMING, holdFor, cleanText, firstSentence, wrapLines, layoutBubble, parts, placeBubble,
+  FONT, SIGNS, MAX_INPUT, MAX_LINES, LINE_CHARS, TAIL_HEIGHT, TIMING, holdFor, cleanText, firstSentence, wrapLines, layoutBubble, parts, placeBubble,
 };

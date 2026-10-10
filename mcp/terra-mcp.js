@@ -19,7 +19,11 @@ const { McpServer } = require('@modelcontextprotocol/server');
 const { serveStdio } = require('@modelcontextprotocol/server/stdio');
 const { z } = require('zod');
 const { REACTIONS, STATES, MOODS } = require('../pet-commands.js');
-const { MAX_INPUT, cleanText, layoutBubble } = require('../bubble-layout.js');
+const { MAX_INPUT, SIGNS, cleanText, layoutBubble } = require('../bubble-layout.js');
+
+// What the bubble's font can write, from the font itself.
+const CHARACTERS = `A-Z, 0-9 and ${SIGNS.join(' ')}`;
+const WRITES = `Terra writes in capital letters with ${CHARACTERS}; letters lose their accents (é is E) and any other character shows as a space.`;
 const { version } = require('../package.json');
 const launcher = require('./pet-launcher.js');
 const openWithClaude = require('../open-with-claude.js');
@@ -77,7 +81,7 @@ For example: terra_state("working") before a long answer and terra_state("done",
 const SAY_DESCRIPTION = `Show a short line of text in a speech bubble next to Terra, the user's desktop pet, while it talks. The user sees it on their screen for a few seconds.
 Use it for short, simple answers and friendly remarks, for example "Paris is the capital of France!" or "Happy to help!", as an extra line during a reply: the answer itself goes in terra_state("done")'s say. At most once per reply.
 Do not use it for code, lists, long explanations or anything sensitive (passwords, personal or private details).
-It fits 2 lines of about 20 characters each; longer text is cut with "...". Terra writes in capital letters and has only A-Z, 0-9, spaces and . , ! ? : ' - + ( ) /; anything else is left out.`;
+It fits 2 lines of about 20 characters each; longer text is cut with "...". ${WRITES}`;
 
 const STATE_DONE = {
   working: 'Terra is working at its computer. Call terra_state("done") with a mood when you finish.',
@@ -154,7 +158,7 @@ function done(mood, line) {
 // will show. The text is never logged.
 async function say(raw) {
   const layout = layoutBubble(raw);
-  if (!layout) return text("Nothing to show: Terra's font has only A-Z, 0-9 and . , ! ? : ' - + ( ) /. No need to retry.");
+  if (!layout) return text(`Nothing to show: Terra's font has only ${CHARACTERS}. No need to retry.`);
   const { status, down } = await post({ text: cleanText(raw).slice(0, MAX_INPUT) }, '/say');
   if (down) return text(DOWN);
   if (status === 409) return text("The user has turned Terra's speech bubbles off, so nothing was shown. Don't use terra_say again in this conversation.");
@@ -182,7 +186,7 @@ function createServer() {
     inputSchema: z.object({
       state: z.enum(STATES).describe('What you are doing now: working, waiting, done or idle.'),
       mood: z.enum(MOODS).optional().describe('Only with done, and always with done: how the conversation went. happy, sad, angry or neutral.'),
-      say: z.string().optional().describe('Required with done (ignored otherwise): one short line, about 40 characters, for Terra\'s speech bubble. A short answer: the answer itself ("Tokyo!", "42!"). A long answer: a short summary ("Facebook: Meta\'s social network!"). Thanks or greetings: something friendly ("Happy to help!"). Never code or private details.'),
+      say: z.string().optional().describe(`Required with done (ignored otherwise): one short line, about 40 characters, for Terra's speech bubble. A short answer: the answer itself ("Tokyo!", "42!"). A long answer: a short summary ("Facebook: Meta's social network!"). Thanks or greetings: something friendly ("Happy to help!"). Never code or private details. ${WRITES}`),
     }).superRefine(({ state, say: line }, ctx) => {
       if (state === 'done' && !(typeof line === 'string' && line.trim())) ctx.addIssue({ code: 'custom', path: ['say'], message: SAY_REQUIRED });
     }),
