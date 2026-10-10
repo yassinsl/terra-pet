@@ -1,14 +1,23 @@
-// Sound effects in the real app, with a fake audio player in the pet's page: off by
-// default, the Sound menu (and that it is saved), the right sound for each Claude Code
-// hook event and Claude desktop command, the bubble's pop and talk blips, volume, no sound
-// while hidden or asleep, never the same sound over itself or more than 2 at once, and a
-// real (muted) sound playing without focus or a Dock icon.
+// Sound effects in the real app, with a fake afplay (sound-player.js's play, in this main
+// process): off by default, the Sound menu (and that it is saved), Test sound, the right
+// sound for each Claude Code hook event and Claude desktop command, the bubble's pop and
+// talk blips, volume, no sound while hidden or asleep, never the same sound over itself or
+// more than 2 at once, and the real afplay (muted): exit 0, no focus, no Dock icon.
 // Run: npx electron test/e2e/sound.e2e.js   (or npm test)
 const {
   ROOT, t, check, section, wait, js, menuItem, waitFor, attempt, start, fs, path,
 } = require('./lib.js');
 const { app, BrowserWindow } = require('electron');
 const { SOUNDS } = require(path.join(ROOT, 'renderer', 'sounds.js'));
+const player = require(path.join(ROOT, 'sound-player.js'));
+
+// The fake afplay: records each sound (main's clock) and "plays" for the sound's length.
+const realPlay = player.play;
+const recorded = [];
+player.play = (name, volume) => {
+  recorded.push([Date.now(), name, volume]);
+  return new Promise((resolve) => setTimeout(() => resolve(0), SOUNDS[name] || 0));
+};
 const { layoutBubble, TIMING } = require(path.join(ROOT, 'bubble-layout.js'));
 
 const json = (v) => JSON.stringify(v);
@@ -20,7 +29,7 @@ const post = (route, body) => fetch(`http://127.0.0.1:${port()}${route}`, { meth
 const prefs = () => JSON.parse(fs.readFileSync(path.join(t.userData, 'preferences.json'), 'utf8'));
 
 async function takeSounds() {
-  const got = await js('window.__sounds.splice(0)');
+  const got = recorded.splice(0);
   all.push(...got);
   return got;
 }
@@ -37,17 +46,17 @@ const names = (list) => list.map((s) => s[1]);
 
 start(async () => {
   // The fake player: records what the page asks for, plays nothing.
-  // (The real one is kept for the last two checks.)
-  await js('window.__realPlayer = soundPlayer; window.__sounds = []; soundPlayer = { play: (name, volume) => window.__sounds.push([Math.round(performance.now()), name, volume]) }; true');
   menuItem('Patrol').click(); // keep the pet still while testing
   await waitFor('idle', 4000);
 
   section('off by default');
   {
     const labels = soundMenu().items.filter((i) => i.type !== 'separator').map((i) => `${i.label}${i.checked ? '*' : ''}${i.enabled ? '' : ' (off)'}`).join(', ');
-    check('tray: Sound > Sound effects (off), Talk blips (on, greyed out), Volume Low', labels === 'Sound effects, Talk blips* (off), Volume (off), Low*, Medium, High', labels);
+    check('tray: Sound > Sound effects (off), Talk blips (on, greyed out), Volume Low, Test sound', labels === 'Sound effects, Talk blips* (off), Volume (off), Low*, Medium, High, Test sound', labels);
     const heard = await soundsOf(() => post('/mcp', { reaction: 'love' }), 2500);
     check('  a reaction with sound off: silence', heard.length === 0, json(heard));
+    const test = await soundsOf(() => soundItem('Test sound').click(), 400);
+    check('  Sound > Test sound: hi.wav at once, even with sound effects off', json(names(test)) === json(['hi']) && test[0][2] === 0.3, json(test));
   }
 
   section('turning it on (saved in preferences.json)');
@@ -66,7 +75,7 @@ start(async () => {
   ]) {
     const heard = await soundsOf(() => post('/event', body), 1500);
     await waitFor(settle, 6000);
-    check(`  ${label} -> ${want}`, names(heard)[0] === want && heard.every((s) => s[2] === 0.25), `${names(heard).join(', ') || 'silence'} at volume ${heard[0] && heard[0][2]}`);
+    check(`  ${label} -> ${want}`, names(heard)[0] === want && heard.every((s) => s[2] === 0.3), `${names(heard).join(', ') || 'silence'} at volume ${heard[0] && heard[0][2]}`);
   }
 
   section('Claude desktop tools');
@@ -132,7 +141,7 @@ start(async () => {
     bubbleWin.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(b.width / 2), y: Math.round(b.height / 3) });
     bubbleWin.webContents.sendInputEvent({ type: 'mouseDown', x: Math.round(b.width / 2), y: Math.round(b.height / 3), button: 'left', clickCount: 1 });
     bubbleWin.webContents.sendInputEvent({ type: 'mouseUp', x: Math.round(b.width / 2), y: Math.round(b.height / 3), button: 'left', clickCount: 1 });
-    const clickedAt = await js('Math.round(performance.now())');
+    const clickedAt = Date.now();
     await bubbleGone();
     await wait(1500);
     const heard = await takeSounds();
@@ -149,7 +158,7 @@ start(async () => {
   }
 
   section('volume');
-  for (const [label, want] of [['Medium', 0.5], ['High', 0.85], ['Low', 0.25]]) {
+  for (const [label, want] of [['Medium', 0.6], ['High', 1], ['Low', 0.3]]) {
     soundItem(label).click();
     await wait(150);
     await waitFor('idle', 8000);
@@ -177,10 +186,11 @@ start(async () => {
   }
   {
     await takeSounds();
-    const asleep = await js("setState('sleep'); [state, sound.play('pop'), sound.play('hi')]");
-    await wait(200);
+    // Asleep, the page asks for sounds the way it always does; main.js must stay quiet.
+    const asleep = await js("setState('sleep'); window.terra.soundCue('love'); window.terra.soundCue('pop'); state");
+    await wait(400);
     const heard = await takeSounds();
-    check('  asleep: silence', asleep[0] === 'sleep' && asleep[1] === false && asleep[2] === false && heard.length === 0, `state ${asleep[0]}, played ${asleep.slice(1).join(', ')}`);
+    check('  asleep: silence', asleep === 'sleep' && heard.length === 0, `state ${asleep}, heard ${names(heard).join(', ') || 'nothing'}`);
     await js("setState('idle')");
   }
 
@@ -198,7 +208,14 @@ start(async () => {
     check(`  never the same sound over itself, never more than 2 at once (${sorted.length} sounds)`, selfOverlap === 0 && most <= 2 && sorted.length >= 30, `at most ${most} at once, ${selfOverlap} overlapping themselves`);
   }
 
-  section('the real player');
+  section('the real afplay (muted: -v 0)');
+  {
+    const code = await realPlay('pop', 0);
+    await wait(200);
+    const dock = app.dock ? app.dock.isVisible() : false;
+    check('  pop.wav: afplay starts and exits with 0, Terra not focused, no Dock icon', code === 0 && !dock && !t.win.isFocused() && BrowserWindow.getFocusedWindow() === null,
+      `exit code ${code}, Dock icon ${dock}, focused window ${BrowserWindow.getFocusedWindow() ? 'yes' : 'none'}`);
+  }
   {
     const logged = [];
     const realError = console.error;
@@ -206,19 +223,9 @@ start(async () => {
       logged.push(args.join(' '));
       realError(...args);
     };
-    const results = await js("Promise.all([__realPlayer.play('no-such-sound', 0), __realPlayer.play('no-such-sound', 0)])");
-    await wait(300);
+    const codes = await Promise.all([realPlay('no-such-sound', 0), realPlay('no-such-sound', 0)]);
     console.error = realError;
     const lines = logged.filter((l) => l.startsWith('Terra: a sound effect could not play'));
-    check('  a sound that cannot play: refused, and logged once (not twice)', results.every((r) => r.played === false && r.error) && lines.length === 1,
-      `${results[0].error}; logged: ${lines[0] || 'nothing'}`);
-    t.consoleLog = t.consoleLog.filter((m) => !/no-such-sound/.test(m.message)); // the page's own note about the missing file
-  }
-  {
-    const played = await js("__realPlayer.play('pop', 0)"); // muted: heard by nobody
-    await wait(200);
-    const dock = app.dock ? app.dock.isVisible() : false;
-    check('  pop.wav through the real player (muted): play() resolves, Terra not focused, no Dock icon', played.played === true && !dock && !t.win.isFocused() && BrowserWindow.getFocusedWindow() === null,
-      `${JSON.stringify(played)}, Dock icon ${dock}, focused window ${BrowserWindow.getFocusedWindow() ? 'yes' : 'none'}`);
+    check('  a file afplay cannot play: a non-zero exit, logged once (not twice)', codes.every((c) => c !== 0) && lines.length === 1, `exit codes ${codes.join(', ')}; logged: ${lines[0] || 'nothing'}`);
   }
 });

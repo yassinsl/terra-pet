@@ -53,6 +53,10 @@
       "Bot/spritesheet-x1.png",
       "Bot/reactions/emotes-only/*.png",
       "Bot/bubble/*",
+      "Bot/sounds/*.wav",
+      "sound-player.js"
+    ],
+    "asarUnpack": [
       "Bot/sounds/*.wav"
     ],
     "mac": {

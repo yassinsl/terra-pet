@@ -103,11 +103,9 @@ for (const [prefs, claudeOpen, want] of [
 section('the Sound menu at startup (remembered)');
 {
   const fresh = launch(undefined, { prefs: { showWhen: 'always' } });
-  check('  nothing chosen yet: sound off, talk blips on (greyed out), volume low', fresh.soundMenu === 'Sound effects, Talk blips* (off), Volume (off), Low*, Medium, High'
-    && JSON.stringify(fresh.sound) === JSON.stringify({ effects: false, blips: true, volume: 'low' }), `${fresh.soundMenu}; page ${JSON.stringify(fresh.sound)}`);
+  check('  nothing chosen yet: sound off, talk blips on (greyed out), volume low', fresh.soundMenu === 'Sound effects, Talk blips* (off), Volume (off), Low*, Medium, High, Test sound', fresh.soundMenu);
   const mine = launch(undefined, { prefs: { showWhen: 'always', soundEffects: true, talkBlips: false, volume: 'high' } });
-  check('  saved choices come back: on, no talk blips, high', mine.soundMenu === 'Sound effects*, Talk blips, Volume (off), Low, Medium, High*'
-    && JSON.stringify(mine.sound) === JSON.stringify({ effects: true, blips: false, volume: 'high' }), `${mine.soundMenu}; page ${JSON.stringify(mine.sound)}`);
+  check('  saved choices come back: on, no talk blips, high', mine.soundMenu === 'Sound effects*, Talk blips, Volume (off), Low, Medium, High*, Test sound', mine.soundMenu);
 }
 
 section('Start at login, packaged app (login item calls recorded, not made)');

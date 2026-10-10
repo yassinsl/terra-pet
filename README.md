@@ -273,21 +273,23 @@ down at its laptop, a short done for a neutral done, and a pop when a speech bub
 appears. While a bubble's text shows, soft **Talk blips** follow it at reading pace (turn
 them off on their own). **Volume**: Low (the default), Medium or High. A sound never plays
 over itself, at most 2 play at once, and Terra stays silent while it is hidden or asleep.
-The sounds play from Terra's own window, so it never takes focus or shows in the Dock. Your
-choices are remembered.
+Your choices are remembered.
 
-Hearing nothing? Open Terra's menu and check **Sound > Sound effects** is ticked (while the
-end-to-end tests run, a second Terra with its own menu bar icon is there too; its settings
-aren't yours). To check the sound itself, run
+Terra plays them with macOS's own `afplay` (Low, Medium and High are `afplay -v` 0.3, 0.6
+and 1.0), started in the background, so it never takes focus or shows in the Dock.
+
+Hearing nothing? **Sound > Test sound** plays Terra's hi at once, at the chosen volume,
+even with the effects off. Check **Sound > Sound effects** is ticked in Terra's own menu
+(while the end-to-end tests run, a second Terra with its own menu bar icon is there too;
+its settings aren't yours). From a terminal,
 
 ```sh
 /Applications/Terra.app/Contents/MacOS/Terra --check-sound
 ```
 
-which plays Terra's hi at Low volume, the same way the pet does, and prints whether it
-played (`"played":true`); it runs next to an open Terra without disturbing it. When Terra
-runs from a terminal, it also says where its sound files are at startup, and the first
-sound that fails to play.
+plays the same hi with afplay and prints whether afplay exited with 0 (`"played":true`);
+it runs next to an open Terra without disturbing it. When Terra runs from a terminal, it
+also says where its sound files are at startup, and the first sound that fails to play.
 
 ## Make your own skin or animation
 
@@ -301,7 +303,8 @@ All the art is in [`Bot/`](Bot):
   on that canvas, so an emote is drawn in the space above and around it.
 - **`Bot/sounds/`**: the sound effects (mono WAV), copied from
   [`design/terra-sounds/`](design/terra-sounds), whose `README.json` says which plays when;
-  `renderer/sounds.js` holds the same list and their lengths.
+  `renderer/sounds.js` holds the same list and their lengths. The packaged app keeps them
+  outside its archive (`app.asar.unpacked`), where `afplay` can read them.
 - **`Bot/bubble/`**: the speech bubble (a 9-slice body, tails, pop-in frames and a 5x7
   pixel font), copied from [`design/terra-bubble-assets/`](design/terra-bubble-assets),
   which also has the reference pictures and the finished bubbles the tests compare against;
@@ -393,6 +396,7 @@ notarized, which is why macOS asks you to confirm the first time you open it.
 - `bubble-window.js`, `bubble-preload.js`: its window (`renderer/bubble.html` draws it)
 - `renderer/`: the page that draws Terra: the state machine, animations and emotes, and
   `sounds.js` (which sound when, and the rules for playing them)
+- `sound-player.js`: plays a sound effect with `afplay`
 - `assets/`: the app and menu bar icons
 - `test/`: unit and end-to-end tests (`test/run.js` runs them all)
 

@@ -89,9 +89,33 @@ section('the rules');
     clock.t = at;
     m.play('hi');
   }
-  check('volume: low, medium, high (anything else: low)', json(played.map((p) => p[2])) === json([0.25, 0.5, 0.85, 0.25]), json(played.map((p) => p[2])));
+  check('volume for afplay -v: low 0.3, medium 0.6, high 1.0 (anything else: low)', json(played.map((p) => p[2])) === json([0.3, 0.6, 1, 0.3]), json(played.map((p) => p[2])));
   check('  an unknown sound: nothing', m.play('boom') === false);
 }
+
+section('a player that says when it ends (afplay\'s process)');
+(async () => {
+  const clock = { t: 0 };
+  const ends = {};
+  const m = s.createMixer({
+    player: { play: (name) => new Promise((resolve) => { ends[name] = resolve; }) },
+    now: () => clock.t,
+  });
+  m.setSettings({ effects: true });
+  m.play('pop'); // 50 ms long, but its process is still running
+  clock.t = 1000;
+  const whileRunning = m.play('pop');
+  ends.pop(0);
+  await new Promise((r) => setImmediate(r));
+  const afterExit = m.play('pop');
+  check('  held until the process ends, not just for the sound\'s length', !whileRunning && afterExit, `at 1 s while running: ${whileRunning}; after it ended: ${afterExit}`);
+  const hung = ends.pop; // that last pop's process never ends (until much later)
+  clock.t += 50 + s.HELD_AT_MOST;
+  const afterHang = m.play('pop'); // a new pop, with its own process
+  hung(0); // the hung one ends at last: it must not free the new pop
+  await new Promise((r) => setImmediate(r));
+  const overNew = m.play('pop');
+  check('  a process that never ends gives its place up after 5 s, and ending late frees nothing new', afterHang && !overNew, `after the hang: ${afterHang}; over the new one: ${overNew}`);
 
 section('talk blips at the reading pace');
 {
@@ -109,3 +133,4 @@ section('talk blips at the reading pace');
 }
 
 process.exitCode = summary() ? 1 : 0;
+})();

@@ -1,5 +1,4 @@
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, screen } = require('electron');
 const ANIMATIONS = require('./renderer/animations.js');
@@ -12,6 +11,8 @@ const claude = require('./claude-app.js'); // used as claude.isRunning() so test
 const openWithClaude = require('./open-with-claude.js');
 const { createBubbleWindow } = require('./bubble-window.js');
 const { TIMING, cleanText, firstSentence, layoutBubble } = require('./bubble-layout.js');
+const sounds = require('./renderer/sounds.js');
+const player = require('./sound-player.js'); // used as player.play() so tests can fake it
 const { HOST, startListener, removePortFile } = require('./listener.js');
 const { matchReaction } = require('./reactions.js');
 
@@ -63,43 +64,21 @@ const CLI = {
   '--install-mcp': () => mcp.install(mcp.configPathFromArgs(process.argv)),
   '--uninstall-mcp': () => mcp.uninstall(mcp.configPathFromArgs(process.argv)),
 };
-// Sound effects play in the pet's page, which nobody ever clicks: no user gesture needed.
-// Electron's webPreferences.autoplayPolicy (set on the pet's window) already defaults to
-// this; the switch says the same to Chromium for every page, before the app is ready.
-app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-
-const SOUND_DIR = path.join(__dirname, 'Bot', 'sounds');
-const soundFileCount = () => {
-  try {
-    return fs.readdirSync(SOUND_DIR).filter((n) => n.endsWith('.wav')).length;
-  } catch {
-    return 0;
-  }
-};
-
 const cliFlag = Object.keys(CLI).find((flag) => process.argv.includes(flag));
 if (process.argv.includes('--check-sound')) checkSound();
 else if (cliFlag) runCli(cliFlag);
 else startApp();
 
-// `Terra --check-sound [--muted]`: plays one sound effect (hi, at Low volume; silent with
-// --muted) the way the pet does, from its page, in a hidden window of its own, then prints
-// whether play() went through and quits: exit 0 if it did. It uses a temporary data
-// folder, so it runs next to a Terra that is open, and it never shows the pet.
+// `Terra --check-sound [--muted]`: plays hi.wav the way every sound effect plays (afplay,
+// at Low volume; -v 0 with --muted), prints whether afplay started and exited with 0, and
+// quits: exit 0 if it did. It shows no pet and leaves an open Terra alone.
 function checkSound() {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'terra-sound-check-'));
-  app.setPath('userData', userData);
   app.whenReady().then(async () => {
     if (app.dock) app.dock.hide();
-    const page = new BrowserWindow({
-      show: false,
-      webPreferences: { preload: path.join(__dirname, 'preload.js'), autoplayPolicy: 'no-user-gesture-required' },
-    });
-    await page.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-    const volume = process.argv.includes('--muted') ? 0 : 'VOLUMES.low';
-    const result = await page.webContents.executeJavaScript(`checkSound('hi', ${volume})`);
-    fs.writeSync(1, `${JSON.stringify({ ...result, soundDir: SOUND_DIR, soundFiles: soundFileCount() })}\n`);
-    fs.rmSync(userData, { recursive: true, force: true });
+    const volume = process.argv.includes('--muted') ? 0 : sounds.VOLUMES.low;
+    const exitCode = await player.play('hi', volume);
+    const result = { played: exitCode === 0, exitCode, player: player.AFPLAY, file: player.fileOf('hi'), soundFiles: player.soundFileCount() };
+    fs.writeSync(1, `${JSON.stringify(result)}\n`);
     app.exit(result.played ? 0 : 1);
   });
 }
@@ -258,16 +237,49 @@ function showBubble(id) {
   else sendToPet('pet:bubble-ended', id);
 }
 
-// The Sound menu's choices, for the pet's page, which plays the sounds (renderer/sounds.js).
-function sendSoundSettings() {
-  sendToPet('pet:sound-settings', { effects: prefs.soundEffects, blips: prefs.talkBlips, volume: prefs.volume });
+// ---- Sound effects ----
+// The pet's page says which sound a moment needs (renderer/sounds.js lists them); the bubble's
+// pop and talk blips come from here. The mixer applies the rules: the Sound menu, never the
+// same sound over itself, at most 2 at once, silence while hidden or asleep. Then afplay
+// plays it (sound-player.js), the one way Terra makes a sound.
+const mixer = sounds.createMixer({
+  player: { play: (name, volume) => player.play(name, volume) },
+  quiet: () => !petShown || hidePending || pet.state === 'sleep',
+  now: () => Date.now(),
+});
+
+function applySoundSettings() {
+  mixer.setSettings({ effects: prefs.soundEffects, blips: prefs.talkBlips, volume: prefs.volume });
 }
 
 function setSound(change) {
   Object.assign(prefs, change);
   savePrefs();
-  sendSoundSettings();
+  applySoundSettings();
   updateTrayMenu();
+}
+
+// Sound > Test sound: hi.wav at the chosen volume, straight away, whatever the other
+// settings and rules say, to check that sound works.
+function testSound() {
+  player.play('hi', sounds.VOLUMES[prefs.volume]);
+}
+
+// The speech bubble: a pop when it appears, then talk blips while its text shows, at its
+// reading pace (a blip every 2 or 3 characters), until it fades, is dismissed or replaced.
+let blipTimers = [];
+function onBubblePhase(phase, chars) {
+  blipTimers.forEach(clearTimeout);
+  blipTimers = [];
+  if (phase === 'pop') mixer.play(sounds.BUBBLE_POP);
+  if (phase !== 'full') return;
+  let last = null;
+  for (const at of sounds.blipTimes(chars, TIMING.perCharMs)) {
+    blipTimers.push(setTimeout(() => {
+      last = sounds.nextBlip(last);
+      mixer.play(last, { blip: true });
+    }, at));
+  }
 }
 
 function setSpeechBubbles(on) {
@@ -456,7 +468,6 @@ function createWindow() {
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      autoplayPolicy: 'no-user-gesture-required', // sound effects play without a click first
     },
   });
 
@@ -474,7 +485,6 @@ function createWindow() {
   });
   win.webContents.on('did-finish-load', () => {
     sendToPet('pet:set-patrol', patrolEnabled);
-    sendSoundSettings();
     if (!wantShown()) sendToPet('pet:visibility', { visible: false, now: true });
   });
   win.on('move', () => {
@@ -486,8 +496,7 @@ function createWindow() {
     petWindow: win,
     getScale: () => scale,
     onEnded: (id) => sendToPet('pet:bubble-ended', id),
-    // For the pop and the talk blips, at the bubble's reading pace.
-    onPhase: (phase, chars) => sendToPet('pet:bubble-phase', { phase, chars, perCharMs: TIMING.perCharMs }),
+    onPhase: onBubblePhase, // the pop and the talk blips
   });
 }
 
@@ -590,6 +599,8 @@ function updateTrayMenu() {
         ...[['low', 'Low'], ['medium', 'Medium'], ['high', 'High']].map(([id, label]) => ({
           label, type: 'radio', checked: prefs.volume === id, click: () => setSound({ volume: id }),
         })),
+        { type: 'separator' },
+        { label: 'Test sound', click: testSound },
       ],
     },
     {
@@ -637,12 +648,10 @@ function startApp() {
     return;
   }
 
-  // A sound effect that wouldn't play (renderer/pet.js reports the first one).
-  let soundProblemLogged = false;
-  ipcMain.on('pet:sound-problem', (event, problem) => {
-    if (!win || event.sender !== win.webContents || soundProblemLogged || typeof problem !== 'string') return;
-    soundProblemLogged = true;
-    console.error(`Terra: a sound effect could not play (${problem.slice(0, 200)})`);
+  // A moment's sound, named by the pet's page (talk blips come only from here).
+  ipcMain.on('pet:sound-cue', (event, name) => {
+    if (!win || event.sender !== win.webContents || typeof name !== 'string') return;
+    if (Object.hasOwn(sounds.SOUNDS, name) && !sounds.TALK_BLIPS.includes(name)) mixer.play(name);
   });
 
   ipcMain.on('pet:ready-to-hide', (event) => {
@@ -698,7 +707,8 @@ function startApp() {
     } catch (err) {
       console.error('Terra could not update its hook script:', err.message);
     }
-    console.log(`Terra: sound files in ${SOUND_DIR} (${soundFileCount()} found)`);
+    applySoundSettings();
+    console.log(`Terra: sound files in ${player.SOUND_DIR} (${player.soundFileCount()} found), played with ${player.AFPLAY}`);
     hooksStatus = hooks.status();
     mcpStatus = mcp.status();
     prefs = visibility.loadPrefs(prefsFile());
