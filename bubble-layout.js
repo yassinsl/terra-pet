@@ -54,6 +54,14 @@ function cleanText(raw) {
   return Array.from(text, plain).join('').replace(/ +/g, ' ').trim();
 }
 
+// Text as written, for what Terra is sent and what its voice says: one line, no control or
+// format characters, at most MAX_INPUT characters. The bubble's capitals come from
+// cleanText; this keeps the words as they were.
+function plainText(raw) {
+  if (typeof raw !== 'string') return '';
+  return raw.slice(0, MAX_INPUT).replace(/\s/gu, ' ').replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/ +/g, ' ').trim();
+}
+
 // The first sentence of a reply from Claude (the Claude Code Stop hook's
 // last_assistant_message), for the bubble: code blocks, headings and table rows are
 // skipped, inline code and links keep only their words, markdown marks go, and it ends at
@@ -158,5 +166,5 @@ function placeBubble(layout, petBounds, scale, workArea) {
 }
 
 module.exports = {
-  FONT, SIGNS, MAX_INPUT, MAX_LINES, LINE_CHARS, TAIL_HEIGHT, TIMING, holdFor, cleanText, firstSentence, wrapLines, layoutBubble, parts, placeBubble,
+  FONT, SIGNS, MAX_INPUT, MAX_LINES, LINE_CHARS, TAIL_HEIGHT, TIMING, holdFor, cleanText, plainText, firstSentence, wrapLines, layoutBubble, parts, placeBubble,
 };

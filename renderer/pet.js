@@ -411,7 +411,9 @@ function runQueue(dt) {
     }
     const { shown } = p;
     let over;
-    if (p.say) {
+    if (p.voice) {
+      over = !voiceSpeaking || queue.length > 0; // talks along with the voice, unless something waits
+    } else if (p.say) {
       over = p.bubbleEnded; // talks for as long as its bubble shows
     } else if (p.loop) {
       // At the end of an emote cycle: on to what waits (or, played once, on to `back`),
@@ -424,10 +426,22 @@ function runQueue(dt) {
     if (!over) return;
     playing = null;
     if (queue.length) startCommand(queue.shift());
+    else if (voiceSpeaking && !p.voice && !hidden) startVoiceTalk(p.back); // still being read out: talk, then back
     else setState(p.back);
     return;
   }
   if (queue.length && petFree()) startCommand(queue.shift());
+  else if (!queue.length && voiceSpeaking && !hidden && (state === 'idle' || state === 'work')) startVoiceTalk();
+}
+
+// Terra's voice is reading a bubble out (main.js, voice.js): the pet talks along with it
+// when it has nothing else to do, then goes back to idle or its laptop.
+let voiceSpeaking = false;
+function startVoiceTalk(back = null) {
+  const then = back || (state === 'work' ? 'sitDown' : 'idle');
+  playing = { name: 'voice', voice: true, anim: 'talk', loop: true, back: then, shown: null, cycleEnded: false };
+  setState('talk');
+  if (state === 'talk') playing.shown = 0;
 }
 
 function startCommand(command) {
@@ -450,13 +464,14 @@ function startCommand(command) {
       break;
     case 'done':
       replyWorking = false;
-      if (command.say) window.terra.showBubble(command.say); // done's line, while the mood plays
       if (command.ending === 'happy') startReaction('stars', { back: 'idle' });
       else if (command.ending === 'sad' || command.ending === 'angry') startReaction(command.ending, { back: 'idle', once: true });
       else {
         setState('idle'); // neutral: just stand up (if working) and idle
         window.terra.soundCue(NEUTRAL_DONE);
       }
+      // done's line, while the mood plays (asked after it starts, so main knows Terra is awake)
+      if (command.say) window.terra.showBubble(command.say);
       break;
     case 'idle':
       replyWorking = false;
@@ -637,6 +652,10 @@ window.terra.onPlayReaction((name, options) => {
 });
 window.terra.onCommand((command) => queueCommand(command));
 window.terra.onBubbleEnded((id) => bubbleEnded(id));
+window.terra.onVoice(({ speaking }) => {
+  voiceSpeaking = speaking === true;
+  runQueue(0);
+});
 window.terra.onSetScale((next) => applyScale(next));
 
 // visible: shown again (greet: because Claude desktop just opened). Not visible: finish

@@ -19,7 +19,7 @@ const { McpServer } = require('@modelcontextprotocol/server');
 const { serveStdio } = require('@modelcontextprotocol/server/stdio');
 const { z } = require('zod');
 const { REACTIONS, STATES, MOODS } = require('../pet-commands.js');
-const { MAX_INPUT, SIGNS, cleanText, layoutBubble } = require('../bubble-layout.js');
+const { SIGNS, plainText, layoutBubble } = require('../bubble-layout.js');
 
 // What the bubble's font can write, from the font itself.
 const CHARACTERS = `A-Z, 0-9 and ${SIGNS.join(' ')}`;
@@ -149,17 +149,19 @@ const SAY_REQUIRED = 'done needs "say": resend terra_state with state "done", yo
 // nothing in it can be drawn), and tells Claude what Terra shows.
 function done(mood, line) {
   const layout = layoutBubble(line);
-  const body = { state: 'done', ...(mood ? { mood } : {}), ...(layout ? { say: cleanText(line).slice(0, MAX_INPUT) } : {}) };
+  // As written (Terra's voice reads it); the bubble draws it in its own capitals.
+  const body = { state: 'done', ...(mood ? { mood } : {}), ...(layout ? { say: plainText(line) } : {}) };
   const ending = mood ? DONE_MOOD[mood] : STATE_DONE.done;
   return send(body, layout ? `${ending} Its bubble says: "${layout.lines.join(' / ')}"${layout.trimmed ? ' (cut to fit: keep it shorter next time)' : ''}.` : ending);
 }
 
-// terra_say: sends Terra the text the font can draw (nothing else), and tells Claude what
-// will show. The text is never logged.
+// terra_say: sends Terra the text as written (one line, no control characters; the bubble
+// draws it in capitals, the voice reads it as is), and tells Claude what will show. The
+// text is never logged.
 async function say(raw) {
   const layout = layoutBubble(raw);
   if (!layout) return text(`Nothing to show: Terra's font has only ${CHARACTERS}. No need to retry.`);
-  const { status, down } = await post({ text: cleanText(raw).slice(0, MAX_INPUT) }, '/say');
+  const { status, down } = await post({ text: plainText(raw) }, '/say'); // as written, for the voice
   if (down) return text(DOWN);
   if (status === 409) return text("The user has turned Terra's speech bubbles off, so nothing was shown. Don't use terra_say again in this conversation.");
   if (status === 404) return text('This copy of Terra is too old for speech bubbles, so nothing was shown. No need to retry.');

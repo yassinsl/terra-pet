@@ -32,7 +32,8 @@ Terra is plain JavaScript with no framework and no bundler. The README's
   bubble text: `terra_say`'s (on `/say`) and `done`'s `say` (on `/mcp`), 500 characters at
   most, only characters the bubble font has. The Claude Code hook sends Claude's reply on
   stop for the same bubble. Treat all of it like prompt text: never log it, never write it
-  to disk, and only ever draw it as glyphs, never as HTML. Keep everything else to fixed
+  to disk, only ever draw it as glyphs, never as HTML, and give it to `say` (the voice) on
+  stdin only, never as an argument. Keep everything else to fixed
   names.
 
 ## Art

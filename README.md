@@ -23,7 +23,7 @@ desktop app is open: it waves hi when Claude opens and tucks itself away when Cl
   it remembers the spot (and goes back to the corner if that screen is gone).
 - Menu bar icon: **Play animation** and **Play reaction** to try everything, **Back to idle**,
   **Size** (1x, 1.5x, 2x, **Match small (2.25x)**, 3x or 4x), **Show Terra** (see below),
-  **Speech bubbles** (on or off), **Sound** (see below), **Patrol** (walks on or off), **Start at login**,
+  **Speech bubbles** (on or off), **Voice** and **Sound** (see below), **Patrol** (walks on or off), **Start at login**,
   **Install in Claude desktop** and
   **Quit**. The top of the menu shows whether Terra is listening and whether the hooks and
   the Claude desktop tools are installed. The icon stays in the menu bar even while Terra
@@ -263,6 +263,19 @@ ends with `...`. Claude is told to use it only for short answers and friendly
 remarks, never for code, lists, long explanations or anything sensitive. **Speech bubbles**
 in the menu turns all of this off.
 
+### Voice
+
+Terra can read its speech bubbles out loud with macOS's own voices. It is **off** until you
+tick **Voice > Speak bubbles**. **Choose voice** lists the English voices installed on your
+Mac (a friendly one, such as Samantha, is picked to start with), **Speed** is Slow, Normal
+or Fast, and **Test voice** says "Hi! I'm Terra." straight away. Your choices are remembered.
+
+It reads the text as it was written, not the bubble's capitals. While it speaks, the bubble
+stays until it has finished, Terra talks, and the talk blips keep quiet. A new bubble stops
+it first, a click on the bubble stops it, and Terra says nothing while it is hidden or
+asleep. It uses `/usr/bin/say`, started in the background; the text goes to it through a
+pipe, never on its command line, and is never written down or logged.
+
 ### Sound
 
 Terra can make small sounds; they are **off** until you turn them on in the menu bar:
@@ -349,12 +362,13 @@ only accepts connections from your own Mac (`127.0.0.1`), where the hook sends i
 which checks it for trigger words in memory and then drops it: prompt text is never written
 to disk, logged, or sent anywhere else. The Claude desktop tools send Terra names from a
 fixed list (`love`, `working`, ...), and the short text of a speech bubble (`terra_say`,
-and `say` with `done`: 500 characters at most, letters and a few signs only). When Claude
+and `say` with `done`: 500 characters at most, on one line, without control characters). When Claude
 Code finishes, the hook passes the first 4,000 characters of Claude's reply through a pipe,
 and Terra keeps only its first sentence for the bubble. All of this text is treated like
-prompt text: kept in memory while the bubble shows, never written to disk or logged, and
-only ever drawn as pixel letters, never as a web page. Terra stores only its position, size,
-Show Terra choice, whether speech bubbles are on and the Sound menu's choices.
+prompt text: kept in memory while the bubble shows, never written to disk or logged, only
+ever drawn as pixel letters, never as a web page, and, with the voice on, given to `say`
+through a pipe (never its command line). Terra stores only its position, size, Show Terra
+choice, whether speech bubbles are on and the Sound and Voice menus' choices.
 
 ## Development
 
@@ -397,6 +411,7 @@ notarized, which is why macOS asks you to confirm the first time you open it.
 - `renderer/`: the page that draws Terra: the state machine, animations and emotes, and
   `sounds.js` (which sound when, and the rules for playing them)
 - `sound-player.js`: plays a sound effect with `afplay`
+- `voice.js`: reads a bubble out with `say` (Voice menu)
 - `assets/`: the app and menu bar icons
 - `test/`: unit and end-to-end tests (`test/run.js` runs them all)
 

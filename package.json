@@ -54,7 +54,8 @@
       "Bot/reactions/emotes-only/*.png",
       "Bot/bubble/*",
       "Bot/sounds/*.wav",
-      "sound-player.js"
+      "sound-player.js",
+      "voice.js"
     ],
     "asarUnpack": [
       "Bot/sounds/*.wav"

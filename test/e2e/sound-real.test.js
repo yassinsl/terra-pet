@@ -52,7 +52,7 @@ section('the packaged app (dist/)');
     const resources = path.join(appDir, 'Contents', 'Resources');
     const asar = path.join(resources, 'app.asar');
     // (Not package.json: electron-builder writes its own, without the build settings.)
-    const current = ['main.js', 'sound-player.js', 'renderer/pet.js', 'renderer/sounds.js', 'preload.js'].every((f) => extractFile(asar, f).equals(fs.readFileSync(path.join(ROOT, f))));
+    const current = ['main.js', 'sound-player.js', 'voice.js', 'renderer/pet.js', 'renderer/sounds.js', 'preload.js'].every((f) => extractFile(asar, f).equals(fs.readFileSync(path.join(ROOT, f))));
     check('  built from this code', current, current ? path.relative(ROOT, appDir) : 'dist/ is older than the code: run npm run dist first');
     const unpacked = path.join(resources, 'app.asar.unpacked', 'Bot', 'sounds');
     const there = WAVS.filter((n) => fs.existsSync(path.join(unpacked, n)) && fs.readFileSync(path.join(unpacked, n)).equals(fs.readFileSync(path.join(ROOT, 'Bot', 'sounds', n))));
@@ -66,5 +66,20 @@ section('the packaged app (dist/)');
   }
 }
 
-fs.rmSync(home, { recursive: true, force: true });
-process.exitCode = summary() ? 1 : 0;
+section('the real say (into a file, so nobody hears it)');
+(async () => {
+  const voice = require(path.join(ROOT, 'voice.js'));
+  const voices = await voice.listVoices();
+  const chosen = voice.defaultVoice(voices);
+  check(`  say -v '?': English voices, a friendly default (${chosen})`, voices.length > 0 && voice.FRIENDLY.includes(chosen), `${voices.length} English voices`);
+  const file = path.join(home, 'terra-voice-check.aiff');
+  const child = voice.spawnSay([...voice.sayArgs({ voice: chosen, rate: 'normal' }), '-o', file]);
+  child.ref(); // Terra lets say run on its own; this test waits for it
+  const exit = new Promise((resolve) => child.on('exit', resolve));
+  child.stdin.end(voice.TEST_LINE); // on stdin, as Terra does
+  const code = await exit;
+  const size = fs.existsSync(file) ? fs.statSync(file).size : 0;
+  check('  Terra\'s say arguments with the text on stdin: exit 0, speech recorded', code === 0 && size > 10000, `exit ${code}, ${size} bytes of audio`);
+  fs.rmSync(home, { recursive: true, force: true });
+  process.exitCode = summary() ? 1 : 0;
+})();

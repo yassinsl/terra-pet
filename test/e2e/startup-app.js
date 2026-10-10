@@ -32,6 +32,15 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const nativeClick = (menu, label) => menu._executeCommand({}, menu.items.find((i) => i.label === label).commandId);
 
 let petWindow = null; // the first window; the speech bubble's comes after it
+// The Voice menu once say has listed the voices: Speak bubbles, the chosen voice, the speed.
+async function voiceMenu() {
+  const items = () => trayMenu.items.find((i) => i.label === 'Voice').submenu.items;
+  const sub = (label) => items().find((i) => i.label === label).submenu.items;
+  for (let n = 0; n < 50 && sub('Choose voice').length < 2; n++) await wait(100);
+  const checked = (list) => list.filter((i) => i.checked).map((i) => i.label).join();
+  return `Speak bubbles${items()[0].checked ? '*' : ''}, voice ${checked(sub('Choose voice'))}, speed ${checked(sub('Speed'))}`;
+}
+
 app.on('browser-window-created', (_e, win) => {
   if (petWindow) return;
   petWindow = win;
@@ -47,6 +56,7 @@ app.on('browser-window-created', (_e, win) => {
       // The Sound menu as the tray shows it (main.js plays by the same choices).
       soundMenu: trayMenu.items.find((i) => i.label === 'Sound').submenu.items.filter((i) => i.type !== 'separator')
         .map((i) => `${i.label}${i.checked ? '*' : ''}${i.enabled ? '' : ' (off)'}`).join(', '),
+      voiceMenu: await voiceMenu(),
     });
     process.stdout.write(`RESULT ${JSON.stringify(await look())}\n`);
     const pick = process.env.TERRA_TEST_PICK;

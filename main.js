@@ -13,6 +13,7 @@ const { createBubbleWindow } = require('./bubble-window.js');
 const { TIMING, cleanText, firstSentence, layoutBubble } = require('./bubble-layout.js');
 const sounds = require('./renderer/sounds.js');
 const player = require('./sound-player.js'); // used as player.play() so tests can fake it
+const voice = require('./voice.js');
 const { HOST, startListener, removePortFile } = require('./listener.js');
 const { matchReaction } = require('./reactions.js');
 
@@ -50,7 +51,7 @@ const mcpSessions = new Set(); // MCP servers (one per running Claude desktop) t
 let claudeQuitTimer = null;
 let bubble = null;     // the speech bubble's window (bubble-window.js)
 let sayCount = 0;
-const pendingSays = new Map(); // id -> layout: bubbles the pet has queued and not shown yet
+const pendingSays = new Map(); // id -> { layout, speech }: bubbles the pet has queued and not shown yet
 const MAX_PENDING_SAYS = 6;    // the pet's queue holds 5, plus the one playing
 const repliedSays = new Set(); // what terra_say showed in this reply (since "working"), cleaned
 
@@ -202,7 +203,7 @@ function queueBubble(text) {
   const layout = layoutBubble(text);
   if (!layout) return null;
   const id = ++sayCount;
-  pendingSays.set(id, layout);
+  pendingSays.set(id, { layout, speech: voice.speechText(text) });
   for (const old of pendingSays.keys()) if (pendingSays.size > MAX_PENDING_SAYS) pendingSays.delete(old);
   return id;
 }
@@ -211,7 +212,54 @@ function queueBubble(text) {
 // celebrates as it always has.
 function showBubbleNow(text) {
   const layout = prefs.speechBubbles && petShown && !hidePending && layoutBubble(text);
-  if (layout) bubble.show(++sayCount, layout);
+  // The pet is starting its stars, so it counts as awake for the voice.
+  if (layout) presentBubble(++sayCount, layout, voice.speechText(text), { waking: true });
+}
+
+// ---- Terra's voice (Voice menu; voice.js speaks with say) ----
+let voices = null;        // the installed English voices, once say has listed them
+let voiceBubbleId = null; // the bubble being read out
+
+const chosenVoice = () => (voices && voices.some((v) => v.name === prefs.voiceName) ? prefs.voiceName : voice.defaultVoice(voices || []));
+
+// Shows a bubble and, with Speak bubbles on, reads it out as written: a new bubble first
+// stops what was being said; nothing is said while the pet is hidden or asleep (waking:
+// it is just being woken up). The bubble stays until the voice has finished, the pet talks
+// meanwhile (renderer/pet.js), and the talk blips keep quiet (onBubblePhase).
+function presentBubble(id, layout, speech, { waking = false } = {}) {
+  voice.stop();
+  const quiet = !petShown || hidePending || (!waking && pet.state === 'sleep');
+  let heard = null;
+  if (prefs.speakBubbles && speech && !quiet) {
+    heard = voice.speak(speech, { voice: chosenVoice(), rate: prefs.voiceRate });
+    voiceBubbleId = id;
+    sendToPet('pet:voice', { speaking: true });
+    heard.then(() => {
+      if (!voice.speaking()) sendToPet('pet:voice', { speaking: false });
+    });
+  }
+  bubble.show(id, layout, { until: heard });
+}
+
+// The bubble went (its time, a click, the pet hiding): its voice stops with it.
+function onBubbleEnded(id) {
+  if (id === voiceBubbleId) {
+    voiceBubbleId = null;
+    voice.stop();
+  }
+  sendToPet('pet:bubble-ended', id);
+}
+
+function setVoice(change) {
+  Object.assign(prefs, change);
+  savePrefs();
+  if (prefs.speakBubbles === false) voice.stop();
+  updateTrayMenu();
+}
+
+// Voice > Test voice: says the test line in the chosen voice and speed, whatever the rest.
+function testVoice() {
+  voice.speak(voice.TEST_LINE, { voice: chosenVoice(), rate: prefs.voiceRate });
 }
 
 // terra_say from Claude desktop (the listener has checked it is short text). The pet queues
@@ -231,9 +279,9 @@ function onSay({ text }) {
 // The pet has come to bubble `id` in its queue (renderer/pet.js); show it, unless it has
 // gone since (replaced, or bubbles turned off) or the pet is hidden.
 function showBubble(id) {
-  const layout = pendingSays.get(id);
+  const say = pendingSays.get(id);
   pendingSays.delete(id);
-  if (layout && prefs.speechBubbles && petShown && !hidePending) bubble.show(id, layout);
+  if (say && prefs.speechBubbles && petShown && !hidePending) presentBubble(id, say.layout, say.speech);
   else sendToPet('pet:bubble-ended', id);
 }
 
@@ -272,7 +320,7 @@ function onBubblePhase(phase, chars) {
   blipTimers.forEach(clearTimeout);
   blipTimers = [];
   if (phase === 'pop') mixer.play(sounds.BUBBLE_POP);
-  if (phase !== 'full') return;
+  if (phase !== 'full' || voice.speaking()) return; // no blips over the voice
   let last = null;
   for (const at of sounds.blipTimes(chars, TIMING.perCharMs)) {
     blipTimers.push(setTimeout(() => {
@@ -495,7 +543,7 @@ function createWindow() {
   bubble = createBubbleWindow({
     petWindow: win,
     getScale: () => scale,
-    onEnded: (id) => sendToPet('pet:bubble-ended', id),
+    onEnded: onBubbleEnded,
     onPhase: onBubblePhase, // the pop and the talk blips
   });
 }
@@ -587,6 +635,27 @@ function updateTrayMenu() {
       type: 'checkbox',
       checked: prefs.speechBubbles,
       click: (item) => setSpeechBubbles(item.checked),
+    },
+    {
+      label: 'Voice',
+      submenu: [
+        { label: 'Speak bubbles', type: 'checkbox', checked: prefs.speakBubbles, click: (item) => setVoice({ speakBubbles: item.checked }) },
+        { type: 'separator' },
+        {
+          label: 'Choose voice',
+          submenu: voices === null ? [{ label: 'Looking for voices…', enabled: false }]
+            : voices.length ? voices.map((v) => ({ label: v.name, type: 'radio', checked: v.name === chosenVoice(), click: () => setVoice({ voiceName: v.name }) }))
+              : [{ label: 'No English voices installed', enabled: false }],
+        },
+        {
+          label: 'Speed',
+          submenu: [['slow', 'Slow'], ['normal', 'Normal'], ['fast', 'Fast']].map(([id, label]) => ({
+            label, type: 'radio', checked: prefs.voiceRate === id, click: () => setVoice({ voiceRate: id }),
+          })),
+        },
+        { type: 'separator' },
+        { label: 'Test voice', click: testVoice },
+      ],
     },
     {
       label: 'Sound',
@@ -708,6 +777,10 @@ function startApp() {
       console.error('Terra could not update its hook script:', err.message);
     }
     applySoundSettings();
+    voice.listVoices().then((list) => {
+      voices = list;
+      if (tray) updateTrayMenu();
+    });
     console.log(`Terra: sound files in ${player.SOUND_DIR} (${player.soundFileCount()} found), played with ${player.AFPLAY}`);
     hooksStatus = hooks.status();
     mcpStatus = mcp.status();
@@ -737,6 +810,7 @@ function startApp() {
 
   app.on('before-quit', saveState); // windows are already gone by will-quit
   app.on('will-quit', () => {
+    voice.stop(); // say runs detached: don't let it talk on after Terra has quit
     if (!listener) return;
     listener.server.close();
     removePortFile(listener.port);

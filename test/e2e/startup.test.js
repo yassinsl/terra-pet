@@ -108,6 +108,14 @@ section('the Sound menu at startup (remembered)');
   check('  saved choices come back: on, no talk blips, high', mine.soundMenu === 'Sound effects*, Talk blips, Volume (off), Low, Medium, High*, Test sound', mine.soundMenu);
 }
 
+section('the Voice menu at startup (remembered)');
+{
+  const fresh = launch(undefined, { prefs: { showWhen: 'always' } });
+  check('  nothing chosen yet: Speak bubbles off, a friendly voice, normal speed', /^Speak bubbles, voice (Samantha|Karen|Moira|Tessa|Daniel), speed Normal$/.test(fresh.voiceMenu), fresh.voiceMenu);
+  const mine = launch(undefined, { prefs: { showWhen: 'always', speakBubbles: true, voiceName: 'Daniel', voiceRate: 'slow' } });
+  check('  saved choices come back: on, Daniel, slow', mine.voiceMenu === 'Speak bubbles*, voice Daniel, speed Slow', mine.voiceMenu);
+}
+
 section('Start at login, packaged app (login item calls recorded, not made)');
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'terra-e2e-userdata-'));

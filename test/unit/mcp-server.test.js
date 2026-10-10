@@ -17,7 +17,6 @@ const { Client } = require('@modelcontextprotocol/client');
 const { StdioClientTransport } = require('@modelcontextprotocol/client/stdio');
 const { startListener, removePortFile } = require(path.join(ROOT, 'listener.js'));
 const { REACTIONS, STATES, MOODS } = require(path.join(ROOT, 'pet-commands.js'));
-const { FONT } = require(path.join(ROOT, 'bubble-layout.js'));
 const EMOTES = require(path.join(ROOT, 'renderer', 'emotes.js'));
 const { terraEntry } = require(path.join(ROOT, 'mcp-installer.js'));
 
@@ -119,7 +118,7 @@ function rawSession() {
     const results = [];
     const withSay = (n) => (n === 'done' ? { say: 'Tokyo!' } : {});
     for (const name of names) results.push(await client.callTool({ name: tool, arguments: { [key]: name, ...withSay(name) } }));
-    const ok = results.every((r) => !r.isError && textOf(r)) && same(commands, names.map((n) => ({ [key]: n, ...(n === 'done' ? { say: 'TOKYO!' } : {}) })));
+    const ok = results.every((r) => !r.isError && textOf(r)) && same(commands, names.map((n) => ({ [key]: n, ...(n === 'done' ? { say: 'Tokyo!' } : {}) })));
     check(`  ${tool}: all ${names.length}`, ok, ok ? `e.g. "${textOf(results[0])}"` : JSON.stringify({ results, commands }));
   }
 
@@ -127,14 +126,14 @@ function rawSession() {
     commands.length = 0;
     const results = [];
     for (const mood of MOODS) results.push(await client.callTool({ name: 'terra_state', arguments: { state: 'done', mood, say: 'Happy to help!' } }));
-    const ok = results.every((r) => !r.isError && textOf(r)) && same(commands, MOODS.map((mood) => ({ state: 'done', mood, say: 'HAPPY TO HELP!' })))
+    const ok = results.every((r) => !r.isError && textOf(r)) && same(commands, MOODS.map((mood) => ({ state: 'done', mood, say: 'Happy to help!' })))
       && results.every((r) => textOf(r).endsWith('Its bubble says: "HAPPY TO HELP!".'));
     check(`  terra_state: done with each mood (${MOODS.length})`, ok, ok ? results.map((r) => `"${textOf(r)}"`).join(' ') : JSON.stringify({ results, commands }));
   }
   {
     commands.length = 0;
     const plain = await client.callTool({ name: 'terra_state', arguments: { state: 'done', say: 'Tokyo!' } });
-    check('  done without a mood: sent with its line, the answer asks for a mood next time', !plain.isError && same(commands, [{ state: 'done', say: 'TOKYO!' }]) && /Next time give done a mood/.test(textOf(plain)), `"${textOf(plain)}"`);
+    check('  done without a mood: sent with its line, the answer asks for a mood next time', !plain.isError && same(commands, [{ state: 'done', say: 'Tokyo!' }]) && /Next time give done a mood/.test(textOf(plain)), `"${textOf(plain)}"`);
     commands.length = 0;
     const errors = [];
     for (const args of [{ state: 'done' }, { state: 'done', mood: 'happy' }, { state: 'done', mood: 'happy', say: '   ' }]) {
@@ -169,14 +168,14 @@ function rawSession() {
     const call = (text) => client.callTool({ name: 'terra_say', arguments: { text } });
     said.length = 0;
     let r = await call('Paris is the capital of France!');
-    check('reaches Terra as the font will draw it; Claude is told what shows', !r.isError && same(said, ['PARIS IS THE CAPITAL OF FRANCE!']) && textOf(r) === 'Terra says: "PARIS IS THE CAPITAL / OF FRANCE!".', `"${textOf(r)}"`);
+    check('reaches Terra as written (the voice reads it; the bubble draws capitals); Claude is told what shows', !r.isError && same(said, ['Paris is the capital of France!']) && textOf(r) === 'Terra says: "PARIS IS THE CAPITAL / OF FRANCE!".', `"${textOf(r)}"`);
     said.length = 0;
     r = await call('The quick brown fox jumps over the lazy dog, again and again, all day long, until the sun goes down');
     check('  long text: cut to fit, and Claude is asked to keep it shorter', !r.isError && /JUMPS OVER THE\.\.\."/.test(textOf(r)) && /keep it shorter next time/.test(textOf(r)) && said.length === 1, `"${textOf(r)}"`);
     said.length = 0;
     r = await call('<b>Hi</b> <script>alert(1)</script>\u0007\u202e');
-    check('  HTML and control characters: only glyphs the font has, shown as text', !r.isError && said.length === 1 && Array.from(said[0]).every((ch) => ch === ' ' || Object.hasOwn(FONT.glyphs, ch))
-      && !/[\u0007\u202e]/.test(said[0]) && said[0] === '<B>HI</B> <SCRIPT>ALERT(1)</SCRIPT>', JSON.stringify(said[0]));
+    check('  HTML: sent as plain text (never shown as HTML); control characters taken out', !r.isError && said.length === 1
+      && !/[\u0007\u202e]/.test(said[0]) && said[0] === '<b>Hi</b> <script>alert(1)</script>', JSON.stringify(said[0]));
     said.length = 0;
     r = await call('😀🎉');
     check('  nothing drawable: not sent, Claude is told why', !r.isError && said.length === 0 && /Nothing to show/.test(textOf(r)), `"${textOf(r)}"`);
@@ -251,7 +250,7 @@ function rawSession() {
     });
   });
   ({ r } = await timed({ state: 'done', mood: 'happy', say: 'Tokyo!' }));
-  check('Terra from before moods: done sent again without mood and say', !r.isError && /too old for moods/.test(textOf(r)) && same(bodies, ['{"state":"done","mood":"happy","say":"TOKYO!"}', '{"state":"done"}']),
+  check('Terra from before moods: done sent again without mood and say', !r.isError && /too old for moods/.test(textOf(r)) && same(bodies, ['{"state":"done","mood":"happy","say":"Tokyo!"}', '{"state":"done"}']),
     `${bodies.join(' then ')}: "${textOf(r)}"`);
   srv.close();
   srv = await fakeTerra(() => {}); // takes the request and never answers

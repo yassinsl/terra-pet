@@ -99,19 +99,35 @@ function createBubbleWindow({ petWindow, getScale, onEnded, onPhase = () => {} }
     onEnded(id, why);
   }
 
+  function fadeOut() {
+    setPhase('fade');
+    later(TIMING.fadeMs, () => finish('timeout'));
+  }
+
   // Shows `layout` (bubble-layout.js) as bubble `id`; one already showing is replaced.
-  // The pop-in frame, then the bubble held for layout.holdMs, then a fade.
-  function show(id, layout) {
+  // The pop-in frame, then the bubble held for layout.holdMs, then a fade. `until`: a
+  // promise (Terra's voice reading it); the bubble also stays until it settles.
+  function show(id, layout, { until = null } = {}) {
     if (current) current.timers.forEach(clearTimeout);
-    current = { id, layout, tail: null, phase: 'pop', timers: [] };
+    const mine = { id, layout, tail: null, phase: 'pop', timers: [], heard: !until, held: false };
+    current = mine;
+    if (until) {
+      const heard = () => {
+        mine.heard = true;
+        if (current === mine && mine.held) fadeOut();
+      };
+      until.then(heard, heard);
+    }
     setMouseOn(false);
     place();
     draw();
     onPhase('pop', charsOf(layout));
     if (!win.isVisible()) win.showInactive();
     later(TIMING.popMs, () => setPhase('full'));
-    later(TIMING.popMs + layout.holdMs, () => setPhase('fade'));
-    later(TIMING.popMs + layout.holdMs + TIMING.fadeMs, () => finish('timeout'));
+    later(TIMING.popMs + layout.holdMs, () => {
+      if (mine.heard) fadeOut();
+      else mine.held = true; // held long enough; fades when the voice has finished
+    });
   }
 
   // A click: fade out now.
