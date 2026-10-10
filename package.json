@@ -52,7 +52,8 @@
       "assets/trayTemplate@2x.png",
       "Bot/spritesheet-x1.png",
       "Bot/reactions/emotes-only/*.png",
-      "Bot/bubble/*"
+      "Bot/bubble/*",
+      "Bot/sounds/*.wav"
     ],
     "mac": {
       "target": [

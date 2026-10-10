@@ -10,7 +10,7 @@ const visibility = require('./visibility.js');
 const claude = require('./claude-app.js'); // used as claude.isRunning() so tests can fake it
 const openWithClaude = require('./open-with-claude.js');
 const { createBubbleWindow } = require('./bubble-window.js');
-const { cleanText, firstSentence, layoutBubble } = require('./bubble-layout.js');
+const { TIMING, cleanText, firstSentence, layoutBubble } = require('./bubble-layout.js');
 const { HOST, startListener, removePortFile } = require('./listener.js');
 const { matchReaction } = require('./reactions.js');
 
@@ -34,7 +34,7 @@ let pet = { state: null, next: null, since: Date.now() }; // as last reported by
 let lastEventAt = Date.now();
 let mouseOnPet = false;
 let saveTimer = null;
-let prefs = { showWhen: visibility.DEFAULT_MODE, loginItemDefaultDone: false, speechBubbles: true };
+let prefs = { showWhen: visibility.DEFAULT_MODE, loginItemDefaultDone: false, speechBubbles: true, soundEffects: false, talkBlips: true, volume: 'low' };
 let claudeRunning = null; // Claude desktop, as of the last check (null: not known yet)
 let lastCodeEventAt = 0;  // last Claude Code hook event
 let petShown = false;
@@ -218,6 +218,18 @@ function showBubble(id) {
   pendingSays.delete(id);
   if (layout && prefs.speechBubbles && petShown && !hidePending) bubble.show(id, layout);
   else sendToPet('pet:bubble-ended', id);
+}
+
+// The Sound menu's choices, for the pet's page, which plays the sounds (renderer/sounds.js).
+function sendSoundSettings() {
+  sendToPet('pet:sound-settings', { effects: prefs.soundEffects, blips: prefs.talkBlips, volume: prefs.volume });
+}
+
+function setSound(change) {
+  Object.assign(prefs, change);
+  savePrefs();
+  sendSoundSettings();
+  updateTrayMenu();
 }
 
 function setSpeechBubbles(on) {
@@ -406,6 +418,7 @@ function createWindow() {
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      autoplayPolicy: 'no-user-gesture-required', // sound effects play without a click first
     },
   });
 
@@ -423,6 +436,7 @@ function createWindow() {
   });
   win.webContents.on('did-finish-load', () => {
     sendToPet('pet:set-patrol', patrolEnabled);
+    sendSoundSettings();
     if (!wantShown()) sendToPet('pet:visibility', { visible: false, now: true });
   });
   win.on('move', () => {
@@ -430,7 +444,13 @@ function createWindow() {
     bubble.follow(); // the speech bubble follows the pet while it walks or is dragged
   });
 
-  bubble = createBubbleWindow({ petWindow: win, getScale: () => scale, onEnded: (id) => sendToPet('pet:bubble-ended', id) });
+  bubble = createBubbleWindow({
+    petWindow: win,
+    getScale: () => scale,
+    onEnded: (id) => sendToPet('pet:bubble-ended', id),
+    // For the pop and the talk blips, at the bubble's reading pace.
+    onPhase: (phase, chars) => sendToPet('pet:bubble-phase', { phase, chars, perCharMs: TIMING.perCharMs }),
+  });
 }
 
 // ---- Tray ----
@@ -520,6 +540,19 @@ function updateTrayMenu() {
       type: 'checkbox',
       checked: prefs.speechBubbles,
       click: (item) => setSpeechBubbles(item.checked),
+    },
+    {
+      label: 'Sound',
+      submenu: [
+        { label: 'Sound effects', type: 'checkbox', checked: prefs.soundEffects, click: (item) => setSound({ soundEffects: item.checked }) },
+        // Blips only sound with the effects on; greyed out until then.
+        { label: 'Talk blips', type: 'checkbox', checked: prefs.talkBlips, enabled: prefs.soundEffects, click: (item) => setSound({ talkBlips: item.checked }) },
+        { type: 'separator' },
+        { label: 'Volume', enabled: false },
+        ...[['low', 'Low'], ['medium', 'Medium'], ['high', 'High']].map(([id, label]) => ({
+          label, type: 'radio', checked: prefs.volume === id, click: () => setSound({ volume: id }),
+        })),
+      ],
     },
     {
       label: 'Patrol',

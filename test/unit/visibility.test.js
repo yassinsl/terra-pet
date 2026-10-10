@@ -37,9 +37,13 @@ section('preferences file');
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'terra-prefs-'));
   const file = path.join(dir, 'preferences.json');
-  check('no file: defaults (speech bubbles on)', JSON.stringify(v.loadPrefs(file)) === JSON.stringify({ showWhen: 'claude', loginItemDefaultDone: false, speechBubbles: true }));
-  v.savePrefs(file, { showWhen: 'always', loginItemDefaultDone: true, speechBubbles: false });
-  check('saved and read back', JSON.stringify(v.loadPrefs(file)) === JSON.stringify({ showWhen: 'always', loginItemDefaultDone: true, speechBubbles: false }), fs.readFileSync(file, 'utf8').replace(/\s+/g, ' '));
+  const defaults = { showWhen: 'claude', loginItemDefaultDone: false, speechBubbles: true, soundEffects: false, talkBlips: true, volume: 'low' };
+  check('no file: defaults (speech bubbles on; sound off, talk blips on, volume low)', JSON.stringify(v.loadPrefs(file)) === JSON.stringify(defaults), JSON.stringify(v.loadPrefs(file)));
+  const mine = { showWhen: 'always', loginItemDefaultDone: true, speechBubbles: false, soundEffects: true, talkBlips: false, volume: 'high' };
+  v.savePrefs(file, mine);
+  check('saved and read back (the Sound menu too)', JSON.stringify(v.loadPrefs(file)) === JSON.stringify(mine), fs.readFileSync(file, 'utf8').replace(/\s+/g, ' '));
+  fs.writeFileSync(file, JSON.stringify({ soundEffects: 'yes', volume: 'loud' }));
+  check('odd sound values: off and low', v.loadPrefs(file).soundEffects === false && v.loadPrefs(file).volume === 'low');
   fs.writeFileSync(file, JSON.stringify({ showWhen: 'always' }));
   check('a file from before speech bubbles: they are on', v.loadPrefs(file).speechBubbles === true);
   fs.writeFileSync(file, JSON.stringify({ showWhen: 'sometimes' }));

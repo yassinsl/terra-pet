@@ -20,7 +20,9 @@ function shouldShow({ mode, claudeRunning, lastCodeEventAt, now }) {
 
 // showWhen: one of MODES. loginItemDefaultDone: the packaged app has turned "Start at
 // login" on once already, so it won't again after you turn it off. speechBubbles: the
-// Speech bubbles checkbox.
+// Speech bubbles checkbox. soundEffects, talkBlips, volume: the Sound menu.
+const VOLUMES = ['low', 'medium', 'high'];
+
 function loadPrefs(file) {
   let saved = {};
   try {
@@ -32,6 +34,10 @@ function loadPrefs(file) {
     showWhen: MODES.some((m) => m.id === saved.showWhen) ? saved.showWhen : DEFAULT_MODE,
     loginItemDefaultDone: saved.loginItemDefaultDone === true,
     speechBubbles: saved.speechBubbles !== false, // the Speech bubbles checkbox, on unless turned off
+    // The Sound menu: effects off unless turned on, talk blips on, volume low.
+    soundEffects: saved.soundEffects === true,
+    talkBlips: saved.talkBlips !== false,
+    volume: VOLUMES.includes(saved.volume) ? saved.volume : 'low',
   };
 }
 

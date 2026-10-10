@@ -1,4 +1,5 @@
-// ANIMATIONS and EMOTES come from animations.js and emotes.js, loaded before this file.
+// ANIMATIONS, EMOTES and the sound rules come from animations.js, emotes.js and sounds.js,
+// loaded before this file.
 
 const CELL_W = 48;
 const CELL_H = 52;
@@ -290,6 +291,8 @@ function enter(name, then = null, emoteName = null) {
   emote = null;
   afterEmote = null;
   if (emoteName) startEmote(emoteName);
+  const effect = emoteName ? FOR_EMOTE[emoteName] : FOR_STATE[name];
+  if (effect) sound.play(effect);
   if (name === 'idle') {
     nextBlinkAt = now + rand(BLINK_EVERY);
     nextPatrolAt = now + rand(PATROL_EVERY);
@@ -448,7 +451,10 @@ function startCommand(command) {
       if (command.say) window.terra.showBubble(command.say); // done's line, while the mood plays
       if (command.ending === 'happy') startReaction('stars', { back: 'idle' });
       else if (command.ending === 'sad' || command.ending === 'angry') startReaction(command.ending, { back: 'idle', once: true });
-      else setState('idle'); // neutral: just stand up (if working) and idle
+      else {
+        setState('idle'); // neutral: just stand up (if working) and idle
+        sound.play(NEUTRAL_DONE);
+      }
       break;
     case 'idle':
       replyWorking = false;
@@ -617,6 +623,42 @@ function onClick() {
   }
 }
 
+// ---- Sound effects (rules in sounds.js; settings from the tray's Sound menu) ----
+
+const audio = {}; // name -> HTMLAudioElement, made the first time it plays
+// What makes the noise: an audio element per sound, in this page (so Terra never takes
+// focus or shows in the Dock to play one). The tests put a fake player here.
+let soundPlayer = {
+  play(name, volume) {
+    if (!audio[name]) audio[name] = new Audio(`../Bot/sounds/${name}.wav`);
+    const a = audio[name];
+    a.volume = volume;
+    a.currentTime = 0;
+    a.play().catch(() => {}); // a sound that can't play is just not heard
+  },
+};
+const sound = createMixer({ player: { play: (name, volume) => soundPlayer.play(name, volume) }, quiet: () => hidden || state === 'sleep' });
+
+// The speech bubble (bubble-window.js, through main.js): a pop when it appears, then talk
+// blips while its text shows, at the bubble's reading pace, until it fades or goes.
+let blipTimers = [];
+function stopBlips() {
+  blipTimers.forEach(clearTimeout);
+  blipTimers = [];
+}
+function onBubblePhase({ phase, chars = 0, perCharMs = 50 }) {
+  stopBlips();
+  if (phase === 'pop') sound.play(BUBBLE_POP);
+  if (phase !== 'full') return;
+  let last = null;
+  for (const at of blipTimes(chars, perCharMs)) {
+    blipTimers.push(setTimeout(() => {
+      last = nextBlip(last);
+      sound.play(last, { blip: true });
+    }, at));
+  }
+}
+
 // ---- Messages from the main process ----
 
 window.terra.onSetState((name, options) => {
@@ -629,6 +671,8 @@ window.terra.onPlayReaction((name, options) => {
 });
 window.terra.onCommand((command) => queueCommand(command));
 window.terra.onBubbleEnded((id) => bubbleEnded(id));
+window.terra.onBubblePhase((change) => onBubblePhase(change));
+window.terra.onSoundSettings((settings) => sound.setSettings(settings));
 window.terra.onSetScale((next) => applyScale(next));
 
 // visible: shown again (greet: because Claude desktop just opened). Not visible: finish

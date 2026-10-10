@@ -23,7 +23,7 @@ desktop app is open: it waves hi when Claude opens and tucks itself away when Cl
   it remembers the spot (and goes back to the corner if that screen is gone).
 - Menu bar icon: **Play animation** and **Play reaction** to try everything, **Back to idle**,
   **Size** (1x, 1.5x, 2x, **Match small (2.25x)**, 3x or 4x), **Show Terra** (see below),
-  **Speech bubbles** (on or off), **Patrol** (walks on or off), **Start at login**,
+  **Speech bubbles** (on or off), **Sound** (see below), **Patrol** (walks on or off), **Start at login**,
   **Install in Claude desktop** and
   **Quit**. The top of the menu shows whether Terra is listening and whether the hooks and
   the Claude desktop tools are installed. The icon stays in the menu bar even while Terra
@@ -263,6 +263,19 @@ ends with `...`. Claude is told to use it only for short answers and friendly
 remarks, never for code, lists, long explanations or anything sensitive. **Speech bubbles**
 in the menu turns all of this off.
 
+### Sound
+
+Terra can make small sounds; they are **off** until you turn them on in the menu bar:
+**Sound > Sound effects**. Then each moment has its own, for Claude Code and Claude desktop
+alike: a hi when it waves, love, idea, sad and angry with those reactions, stars when it
+celebrates (a happy done), a question when it asks, a buzz on errors, a click when it sits
+down at its laptop, a short done for a neutral done, and a pop when a speech bubble
+appears. While a bubble's text shows, soft **Talk blips** follow it at reading pace (turn
+them off on their own). **Volume**: Low (the default), Medium or High. A sound never plays
+over itself, at most 2 play at once, and Terra stays silent while it is hidden or asleep.
+The sounds play from Terra's own window, so it never takes focus or shows in the Dock. Your
+choices are remembered.
+
 ## Make your own skin or animation
 
 All the art is in [`Bot/`](Bot):
@@ -273,6 +286,9 @@ All the art is in [`Bot/`](Bot):
 - **`Bot/reactions/emotes-only/<name>-<n>.png`**: the emotes, numbered from 1. Each is a
   64x80 transparent canvas holding only the emote; the pet's 48x52 cell sits at x=8, y=28
   on that canvas, so an emote is drawn in the space above and around it.
+- **`Bot/sounds/`**: the sound effects (mono WAV), copied from
+  [`design/terra-sounds/`](design/terra-sounds), whose `README.json` says which plays when;
+  `renderer/sounds.js` holds the same list and their lengths.
 - **`Bot/bubble/`**: the speech bubble (a 9-slice body, tails, pop-in frames and a 5x7
   pixel font), copied from [`design/terra-bubble-assets/`](design/terra-bubble-assets),
   which also has the reference pictures and the finished bubbles the tests compare against;
@@ -322,7 +338,7 @@ Code finishes, the hook passes the first 4,000 characters of Claude's reply thro
 and Terra keeps only its first sentence for the bubble. All of this text is treated like
 prompt text: kept in memory while the bubble shows, never written to disk or logged, and
 only ever drawn as pixel letters, never as a web page. Terra stores only its position, size,
-Show Terra choice and whether speech bubbles are on.
+Show Terra choice, whether speech bubbles are on and the Sound menu's choices.
 
 ## Development
 
@@ -362,7 +378,8 @@ notarized, which is why macOS asks you to confirm the first time you open it.
 - `claude-app.js`: whether the Claude desktop app is running
 - `bubble-layout.js`: the speech bubble's text, shape, timing and place beside the pet
 - `bubble-window.js`, `bubble-preload.js`: its window (`renderer/bubble.html` draws it)
-- `renderer/`: the page that draws Terra: the state machine, animations and emotes
+- `renderer/`: the page that draws Terra: the state machine, animations and emotes, and
+  `sounds.js` (which sound when, and the rules for playing them)
 - `assets/`: the app and menu bar icons
 - `test/`: unit and end-to-end tests (`test/run.js` runs them all)
 

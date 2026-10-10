@@ -9,8 +9,10 @@ const { BrowserWindow, ipcMain, screen } = require('electron');
 const { TIMING, TAIL_HEIGHT, parts, placeBubble } = require('./bubble-layout.js');
 
 // petWindow: the pet's BrowserWindow. getScale(): the pet's size. onEnded(id, why): the
-// bubble with that id has gone (why: 'timeout', 'click' or 'hidden').
-function createBubbleWindow({ petWindow, getScale, onEnded }) {
+// bubble with that id has gone (why: 'timeout', 'click' or 'hidden'). onPhase(phase, chars):
+// it popped in, its text shows (full), it fades, or it has gone (hidden); chars is how many
+// characters it shows (for the talk blips).
+function createBubbleWindow({ petWindow, getScale, onEnded, onPhase = () => {} }) {
   const win = new BrowserWindow({
     width: 16,
     height: 20,
@@ -76,10 +78,13 @@ function createBubbleWindow({ petWindow, getScale, onEnded }) {
     current.timers.push(setTimeout(fn, ms));
   }
 
+  const charsOf = (layout) => layout.lines.reduce((n, line) => n + line.length, 0);
+
   function setPhase(phase) {
     if (!current) return;
     current.phase = phase;
     draw();
+    onPhase(phase, charsOf(current.layout));
   }
 
   function finish(why) {
@@ -90,6 +95,7 @@ function createBubbleWindow({ petWindow, getScale, onEnded }) {
     setMouseOn(false);
     win.hide();
     draw();
+    onPhase('hidden', 0);
     onEnded(id, why);
   }
 
@@ -101,6 +107,7 @@ function createBubbleWindow({ petWindow, getScale, onEnded }) {
     setMouseOn(false);
     place();
     draw();
+    onPhase('pop', charsOf(layout));
     if (!win.isVisible()) win.showInactive();
     later(TIMING.popMs, () => setPhase('full'));
     later(TIMING.popMs + layout.holdMs, () => setPhase('fade'));

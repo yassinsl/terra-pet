@@ -44,6 +44,10 @@ app.on('browser-window-created', (_e, win) => {
       loginCalls,
       ...(await win.webContents.executeJavaScript('({ scale, dpr: devicePixelRatio, canvas: [canvas.clientWidth, canvas.clientHeight], backing: [canvas.width, canvas.height] })')),
       checked: trayMenu.items.find((i) => i.label === 'Size').submenu.items.filter((i) => i.checked).map((i) => i.label),
+      // The Sound menu as the tray shows it, and what the page will play by.
+      soundMenu: trayMenu.items.find((i) => i.label === 'Sound').submenu.items.filter((i) => i.type !== 'separator')
+        .map((i) => `${i.label}${i.checked ? '*' : ''}${i.enabled ? '' : ' (off)'}`).join(', '),
+      sound: await win.webContents.executeJavaScript('sound.settings'),
     });
     process.stdout.write(`RESULT ${JSON.stringify(await look())}\n`);
     const pick = process.env.TERRA_TEST_PICK;

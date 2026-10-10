@@ -100,6 +100,16 @@ for (const [prefs, claudeOpen, want] of [
     `window ${x.visible ? 'shown' : 'hidden'}${x.visible === want ? '' : ` (want ${want ? 'shown' : 'hidden'})`}, page loaded at ${x.scale}x`);
 }
 
+section('the Sound menu at startup (remembered)');
+{
+  const fresh = launch(undefined, { prefs: { showWhen: 'always' } });
+  check('  nothing chosen yet: sound off, talk blips on (greyed out), volume low', fresh.soundMenu === 'Sound effects, Talk blips* (off), Volume (off), Low*, Medium, High'
+    && JSON.stringify(fresh.sound) === JSON.stringify({ effects: false, blips: true, volume: 'low' }), `${fresh.soundMenu}; page ${JSON.stringify(fresh.sound)}`);
+  const mine = launch(undefined, { prefs: { showWhen: 'always', soundEffects: true, talkBlips: false, volume: 'high' } });
+  check('  saved choices come back: on, no talk blips, high', mine.soundMenu === 'Sound effects*, Talk blips, Volume (off), Low, Medium, High*'
+    && JSON.stringify(mine.sound) === JSON.stringify({ effects: true, blips: false, volume: 'high' }), `${mine.soundMenu}; page ${JSON.stringify(mine.sound)}`);
+}
+
 section('Start at login, packaged app (login item calls recorded, not made)');
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'terra-e2e-userdata-'));

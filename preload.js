@@ -14,4 +14,6 @@ contextBridge.exposeInMainWorld('terra', {
   readyToHide: () => ipcRenderer.send('pet:ready-to-hide'),
   showBubble: (id) => ipcRenderer.send('pet:show-bubble', id),
   onBubbleEnded: (callback) => ipcRenderer.on('pet:bubble-ended', (_event, id) => callback(id)),
+  onBubblePhase: (callback) => ipcRenderer.on('pet:bubble-phase', (_event, change) => callback(change)),
+  onSoundSettings: (callback) => ipcRenderer.on('pet:sound-settings', (_event, settings) => callback(settings)),
 });

@@ -20,6 +20,7 @@ const SUITES = [
   ['unit', process.execPath, 'test/unit/mcp-server.test.js'],
   ['unit', process.execPath, 'test/unit/window-state.test.js'],
   ['unit', process.execPath, 'test/unit/bubble-layout.test.js'],
+  ['unit', process.execPath, 'test/unit/sounds.test.js'],
   ['unit', process.execPath, 'test/unit/visibility.test.js'],
   ['unit', process.execPath, 'test/unit/pet-launcher.test.js'],
   ['e2e', process.execPath, 'test/e2e/startup.test.js'],
@@ -29,6 +30,7 @@ const SUITES = [
   ['e2e', ELECTRON, 'test/e2e/visibility.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/mcp.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/bubble.e2e.js'],
+  ['e2e', ELECTRON, 'test/e2e/sound.e2e.js'],
   ['e2e', ELECTRON, 'test/e2e/claude-lifecycle.e2e.js'],
   ['e2e', process.execPath, 'test/e2e/open-with-claude.test.js'],
 ];
